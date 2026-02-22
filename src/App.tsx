@@ -193,8 +193,32 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [myOrderIds, setMyOrderIds] = useState<Set<string>>(new Set());
+  // Load myOrderIds from localStorage on mount
+  const [myOrderIds, setMyOrderIds] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem("myOrderIds");
+      if (stored) {
+        const ids = JSON.parse(stored) as string[];
+        return new Set(ids);
+      }
+    } catch (e) {
+      console.error("Failed to load myOrderIds from localStorage", e);
+    }
+    return new Set<string>();
+  });
+  
+  // Save myOrderIds to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      const idsArray = Array.from(myOrderIds);
+      localStorage.setItem("myOrderIds", JSON.stringify(idsArray));
+    } catch (e) {
+      console.error("Failed to save myOrderIds to localStorage", e);
+    }
+  }, [myOrderIds]);
+
   const [historyFilter, setHistoryFilter] = useState<"all" | "open" | "filled">("all");
+  const [mineOnly, setMineOnly] = useState(false);
   const [lastTradeId, setLastTradeId] = useState<string | null>(null);
   const flashRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   
@@ -233,10 +257,22 @@ export default function App() {
     try {
       setErr(null);
 
+      // Determine which history endpoint to use based on mineOnly toggle
+      let historyUrl: string;
+      if (mineOnly && myOrderIds.size > 0) {
+        // Fetch orders by IDs when Mine toggle is ON
+        const idsArray = Array.from(myOrderIds);
+        const idsParam = idsArray.join(",");
+        historyUrl = `${API_BASE_URL}/api/orders/by-ids?ids=${idsParam}`;
+      } else {
+        // Use normal history endpoint when Mine toggle is OFF
+        historyUrl = `${API_BASE_URL}/api/orders/history?limit=50`;
+      }
+
       const [bookRes, tradesRes, historyRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/orders/open?limit=200`),
         fetch(`${API_BASE_URL}/api/orders/trades/db?limit=200`),
-        fetch(`${API_BASE_URL}/api/orders/history?limit=50`),
+        fetch(historyUrl),
       ]);
 
       if (!bookRes.ok) throw new Error("Failed to fetch order book");
@@ -278,12 +314,13 @@ export default function App() {
   };
 
   // Poll all three endpoints every 2s
+  // Re-fetch when mineOnly changes to switch between endpoints
   useEffect(() => {
     fetchAllData();
     const interval = setInterval(fetchAllData, 2000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mineOnly, myOrderIds]);
 
   // Build order book: separate buy/sell, sort
   const { buy, sell } = useMemo(() => {
@@ -393,15 +430,21 @@ export default function App() {
   }, [trades]);
 
   // Filtered order history based on tab selection
+  // When mineOnly is true, we already fetch only my orders from the backend,
+  // so we only need to apply status filters here
   const filteredOrderHistory = useMemo(() => {
-    if (historyFilter === "all") return orderHistory;
+    let result = orderHistory;
+    
     if (historyFilter === "open") {
-      return orderHistory.filter((o) => o.status === "OPEN" || o.status === "PARTIAL");
+      result = result.filter((o) => o.status === "OPEN" || o.status === "PARTIAL");
+    } else if (historyFilter === "filled") {
+      result = result.filter((o) => o.status === "FILLED");
     }
-    if (historyFilter === "filled") {
-      return orderHistory.filter((o) => o.status === "FILLED");
-    }
-    return orderHistory;
+    
+    // When mineOnly is true, we're already fetching only my orders from the backend
+    // No need for additional client-side filtering
+    
+    return result;
   }, [orderHistory, historyFilter]);
 
   // Compute ticker data: last price, change, rolling avg
@@ -892,6 +935,17 @@ export default function App() {
             </button>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "#9ca3af" }}>
+              <input
+                type="checkbox"
+                checked={mineOnly}
+                onChange={(e) => setMineOnly(e.target.checked)}
+                style={{ cursor: "pointer" }}
+              />
+              <span>Mine</span>
+            </label>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 12, color: "#9ca3af" }}>Rows:</span>
             <select
               value={historyVisibleCount}
@@ -913,7 +967,11 @@ export default function App() {
 
       {filteredOrderHistory.length === 0 ? (
         <div style={{ fontSize: 12, color: "#6b7280", padding: "8px 0" }}>
-          {orderHistory.length === 0 ? "No orders yet" : `No ${historyFilter === "all" ? "" : historyFilter} orders`}
+          {orderHistory.length === 0 
+            ? (mineOnly && myOrderIds.size === 0 
+                ? "No orders tracked" 
+                : "No orders yet")
+            : `No ${historyFilter === "all" ? "" : historyFilter} orders`}
         </div>
       ) : (
         <>
