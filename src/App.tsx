@@ -72,8 +72,8 @@ function MiniChart({ trades, usedFallback, isMobile }: { trades: Trade[]; usedFa
 
   const prices = trades.map((t) => t.price);
   const width = 800;
-  const height = isMobile ? 150 : 280;
-  const padding = { top: 20, right: 20, bottom: 50, left: 60 };
+  const height = isMobile ? 150 : 220;
+  const padding = { top: 15, right: 20, bottom: 40, left: 60 };
   
   // Y-axis ticks: Desktop ~5 ticks, Mobile ~3 ticks
   const yAxisTicks = isMobile ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
@@ -192,6 +192,9 @@ export default function App() {
   const [form, setForm] = useState({ type: "buy" as "buy" | "sell", price: "", quantity: "" });
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [myOrderIds, setMyOrderIds] = useState<Set<string>>(new Set());
+  const [historyFilter, setHistoryFilter] = useState<"all" | "open" | "filled">("all");
   const [lastTradeId, setLastTradeId] = useState<string | null>(null);
   const flashRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   
@@ -322,8 +325,35 @@ export default function App() {
         throw new Error(msg?.error || "Order failed");
       }
 
+      const orderData = await res.json().catch(() => null);
+      const orderId = orderData?.id || orderData?.orderId || null;
+      
+      // Track user's order ID
+      if (orderId) {
+        setMyOrderIds((prev) => new Set(Array.from(prev).concat(orderId)));
+      } else {
+        // Fallback: derive from payload + timestamp if no ID returned
+        const fallbackId = `${form.type}-${price}-${quantity}-${Date.now()}`;
+        setMyOrderIds((prev) => new Set(Array.from(prev).concat(fallbackId)));
+      }
+
       setForm({ type: "buy", price: "", quantity: "" });
+      setSuccessMessage(`Order submitted successfully${orderId ? ` (ID: ${orderId})` : ""}`);
+      setTimeout(() => setSuccessMessage(null), 4000);
       await fetchAllData();
+      
+      // Check if order was immediately filled
+      setTimeout(async () => {
+        await fetchAllData();
+        const updatedHistory = await fetch(`${API_BASE_URL}/api/orders/history?limit=50`).then(r => r.json()).catch(() => []);
+        if (orderId) {
+          const filledOrder = updatedHistory.find((o: Order) => o.id === orderId && o.status === "FILLED");
+          if (filledOrder) {
+            setSuccessMessage(`Order ${orderId} filled!`);
+            setTimeout(() => setSuccessMessage(null), 4000);
+          }
+        }
+      }, 500);
     } catch (e: any) {
       setErr(e?.message || "Submit failed");
     } finally {
@@ -361,6 +391,18 @@ export default function App() {
       return tb - ta;
     });
   }, [trades]);
+
+  // Filtered order history based on tab selection
+  const filteredOrderHistory = useMemo(() => {
+    if (historyFilter === "all") return orderHistory;
+    if (historyFilter === "open") {
+      return orderHistory.filter((o) => o.status === "OPEN" || o.status === "PARTIAL");
+    }
+    if (historyFilter === "filled") {
+      return orderHistory.filter((o) => o.status === "FILLED");
+    }
+    return orderHistory;
+  }, [orderHistory, historyFilter]);
 
   // Compute ticker data: last price, change, rolling avg
   const tickerData = useMemo(() => {
@@ -497,7 +539,7 @@ export default function App() {
         background: "#111827",
         border: "1px solid #1f2937",
         borderRadius: 6,
-        padding: 16,
+        padding: 12,
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
@@ -506,7 +548,7 @@ export default function App() {
         ...(isMobile ? {} : { gridColumn: "1 / 2", gridRow: "1 / span 2" }),
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "#f9fafb" }}>
           Order Book
         </h3>
@@ -534,7 +576,7 @@ export default function App() {
         style={{
           display: "grid",
           gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-          gap: 12,
+          gap: 10,
           flex: 1,
           minHeight: 0,
           minWidth: 0,
@@ -544,8 +586,8 @@ export default function App() {
         <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           <h4
             style={{
-              margin: "0 0 8px 0",
-              fontSize: 13,
+              margin: "0 0 6px 0",
+              fontSize: 12,
               fontWeight: 600,
               color: "#10b981",
               textTransform: "uppercase",
@@ -559,23 +601,41 @@ export default function App() {
               No active buys
             </div>
           ) : (
-                  <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
+                  <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "500px", overflowY: "auto" }}>
                     {buy.slice(0, bookVisibleCount).map((o) => (
                 <div
                   key={o.id}
                   style={{
-                    background: "#0f172a",
-                    border: "1px solid #1e293b",
+                    background: myOrderIds.has(o.id) ? "#1e3a8a" : "#0f172a",
+                    border: myOrderIds.has(o.id) ? "1px solid #3b82f6" : "1px solid #1e293b",
                     padding: "8px 10px",
                     borderRadius: 4,
                     fontSize: 12,
                     minWidth: 0,
+                    position: "relative",
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
-                    <span className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af", minWidth: 0 }}>
-                      #{o.id}
-                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                      <span className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af", minWidth: 0 }}>
+                        #{o.id}
+                      </span>
+                      {myOrderIds.has(o.id) && (
+                        <span
+                          style={{
+                            fontSize: 9,
+                            padding: "1px 4px",
+                            background: "#3b82f6",
+                            color: "#ffffff",
+                            borderRadius: 3,
+                            fontWeight: 700,
+                            letterSpacing: 0.5,
+                          }}
+                        >
+                          YOU
+                        </span>
+                      )}
+                    </div>
                     <StatusChip status={o.status} />
                   </div>
 
@@ -604,8 +664,8 @@ export default function App() {
         <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           <h4
             style={{
-              margin: "0 0 8px 0",
-              fontSize: 13,
+              margin: "0 0 6px 0",
+              fontSize: 12,
               fontWeight: 600,
               color: "#ef4444",
               textTransform: "uppercase",
@@ -619,23 +679,41 @@ export default function App() {
               No active sells
             </div>
           ) : (
-                  <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
+                  <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "500px", overflowY: "auto" }}>
                     {sell.slice(0, bookVisibleCount).map((o) => (
                 <div
                   key={o.id}
                   style={{
-                    background: "#0f172a",
-                    border: "1px solid #1e293b",
+                    background: myOrderIds.has(o.id) ? "#1e3a8a" : "#0f172a",
+                    border: myOrderIds.has(o.id) ? "1px solid #3b82f6" : "1px solid #1e293b",
                     padding: "8px 10px",
                     borderRadius: 4,
                     fontSize: 12,
                     minWidth: 0,
+                    position: "relative",
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
-                    <span className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af", minWidth: 0 }}>
-                      #{o.id}
-                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                      <span className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af", minWidth: 0 }}>
+                        #{o.id}
+                      </span>
+                      {myOrderIds.has(o.id) && (
+                        <span
+                          style={{
+                            fontSize: 9,
+                            padding: "1px 4px",
+                            background: "#3b82f6",
+                            color: "#ffffff",
+                            borderRadius: 3,
+                            fontWeight: 700,
+                            letterSpacing: 0.5,
+                          }}
+                        >
+                          YOU
+                        </span>
+                      )}
+                    </div>
                     <StatusChip status={o.status} />
                   </div>
 
@@ -670,16 +748,16 @@ export default function App() {
         background: "#111827",
         border: "1px solid #1f2937",
         borderRadius: 6,
-        padding: 16,
+        padding: 12,
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
         minWidth: 0,
         overflow: "hidden",
-        ...(isMobile ? {} : { gridColumn: "2 / 3", gridRow: "1 / 2" }),
+        ...(isMobile ? {} : { gridColumn: "2 / 3", gridRow: "2 / 3" }),
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "#f9fafb" }}>Trades</h3>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12, color: "#9ca3af" }}>Rows:</span>
@@ -703,7 +781,7 @@ export default function App() {
       {sortedTrades.length === 0 ? (
         <div style={{ fontSize: 12, color: "#6b7280", padding: "8px 0" }}>No trades yet</div>
       ) : (
-        <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
+        <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "400px", overflowY: "auto" }}>
           {sortedTrades.slice(0, tradesVisibleCount).map((t, i) => {
             const tradeKey = t.id || t.createdAt || `trade-${i}`;
             return (
@@ -750,38 +828,93 @@ export default function App() {
         background: "#111827",
         border: "1px solid #1f2937",
         borderRadius: 6,
-        padding: 16,
+        padding: 12,
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
         minWidth: 0,
         overflow: "hidden",
-        ...(isMobile ? {} : { gridColumn: "2 / 3", gridRow: "2 / 3" }),
+        ...(isMobile ? {} : { gridColumn: "2 / 3", gridRow: "1 / 2" }),
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "#f9fafb" }}>Order History</h3>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "#9ca3af" }}>Rows:</span>
-          <select
-            value={historyVisibleCount}
-            onChange={(e) => setHistoryVisibleCount(Number(e.target.value))}
-            className="input-terminal"
-            style={{
-              padding: "4px 8px",
-              fontSize: 12,
-              minWidth: 80,
-            }}
-          >
-            <option value={15}>15</option>
-            <option value={30}>30</option>
-            <option value={50}>50</option>
-          </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {/* Filter Tabs */}
+          <div style={{ display: "flex", gap: 4, border: "1px solid #1f2937", borderRadius: 4, padding: 2 }}>
+            <button
+              type="button"
+              onClick={() => setHistoryFilter("all")}
+              style={{
+                padding: "4px 8px",
+                fontSize: 11,
+                fontWeight: 600,
+                background: historyFilter === "all" ? "#3b82f6" : "transparent",
+                color: historyFilter === "all" ? "#ffffff" : "#9ca3af",
+                border: "none",
+                borderRadius: 3,
+                cursor: "pointer",
+              }}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryFilter("open")}
+              style={{
+                padding: "4px 8px",
+                fontSize: 11,
+                fontWeight: 600,
+                background: historyFilter === "open" ? "#3b82f6" : "transparent",
+                color: historyFilter === "open" ? "#ffffff" : "#9ca3af",
+                border: "none",
+                borderRadius: 3,
+                cursor: "pointer",
+              }}
+            >
+              Open
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryFilter("filled")}
+              style={{
+                padding: "4px 8px",
+                fontSize: 11,
+                fontWeight: 600,
+                background: historyFilter === "filled" ? "#3b82f6" : "transparent",
+                color: historyFilter === "filled" ? "#ffffff" : "#9ca3af",
+                border: "none",
+                borderRadius: 3,
+                cursor: "pointer",
+              }}
+            >
+              Filled
+            </button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, color: "#9ca3af" }}>Rows:</span>
+            <select
+              value={historyVisibleCount}
+              onChange={(e) => setHistoryVisibleCount(Number(e.target.value))}
+              className="input-terminal"
+              style={{
+                padding: "4px 8px",
+                fontSize: 12,
+                minWidth: 80,
+              }}
+            >
+              <option value={15}>15</option>
+              <option value={30}>30</option>
+              <option value={50}>50</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      {orderHistory.length === 0 ? (
-        <div style={{ fontSize: 12, color: "#6b7280", padding: "8px 0" }}>No orders yet</div>
+      {filteredOrderHistory.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#6b7280", padding: "8px 0" }}>
+          {orderHistory.length === 0 ? "No orders yet" : `No ${historyFilter === "all" ? "" : historyFilter} orders`}
+        </div>
       ) : (
         <>
           {/* Desktop header row only (we'll hide on mobile in CSS) */}
@@ -805,8 +938,8 @@ export default function App() {
             <div>ID</div><div>Type</div><div>Price</div><div>Qty</div><div>Status</div><div>Created</div>
           </div>
 
-          <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0 }}>
-            {orderHistory.slice(0, historyVisibleCount).map((o) => (
+          <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "400px", overflowY: "auto" }}>
+            {filteredOrderHistory.slice(0, historyVisibleCount).map((o) => (
               <div
                 key={o.id}
                 className="history-row"
@@ -815,15 +948,33 @@ export default function App() {
                   gridTemplateColumns: "100px 60px 70px 70px 100px 1fr",
                   gap: 10,
                   padding: "8px 10px",
-                  background: "#0f172a",
-                  border: "1px solid #1e293b",
+                  background: myOrderIds.has(o.id) ? "#1e3a8a" : "#0f172a",
+                  border: myOrderIds.has(o.id) ? "1px solid #3b82f6" : "1px solid #1e293b",
                   borderRadius: 4,
                   fontSize: 12,
                   alignItems: "center",
                   minWidth: 0,
+                  position: "relative",
                 }}
               >
-                <div className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af" }}>#{o.id}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af" }}>#{o.id}</div>
+                  {myOrderIds.has(o.id) && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        padding: "1px 4px",
+                        background: "#3b82f6",
+                        color: "#ffffff",
+                        borderRadius: 3,
+                        fontWeight: 700,
+                        letterSpacing: 0.5,
+                      }}
+                    >
+                      YOU
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontWeight: 600, color: o.type === "buy" ? "#10b981" : "#ef4444" }}>{o.type.toUpperCase()}</div>
                 <div style={{ fontFamily: "monospace", color: "#e5e7eb" }}>${o.price}</div>
                 <div style={{ color: "#e5e7eb" }}>{o.quantity}</div>
@@ -844,17 +995,17 @@ export default function App() {
         style={{
           background: "#111827",
           borderBottom: "1px solid #1f2937",
-          padding: "12px 20px",
+          padding: "8px 12px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           flexWrap: "wrap",
-          gap: 12,
+          gap: 8,
           width: "100%",
         }}
         className="mobile-compact-header"
       >
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#f9fafb" }}>
+        <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>
           Mini Exchange
         </h1>
 
@@ -934,18 +1085,18 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1400, margin: "0 auto", padding: "20px", width: "100%" }} className="mobile-compact">
+      <div style={{ maxWidth: "100%", margin: "0 auto", padding: "12px", width: "100%" }} className="mobile-compact">
         {/* Demo Ticker Bar */}
         <div
           style={{
             background: "#111827",
             border: "1px solid #1f2937",
             borderRadius: 6,
-            padding: "12px 16px",
-            marginBottom: 16,
+            padding: "8px 12px",
+            marginBottom: 10,
             display: "flex",
             alignItems: "center",
-            gap: 24,
+            gap: 16,
             flexWrap: "wrap",
           }}
         >
@@ -1006,8 +1157,8 @@ export default function App() {
               background: "#111827",
               border: "1px solid #1f2937",
               borderRadius: 6,
-              padding: 16,
-              marginBottom: 20,
+              padding: 12,
+              marginBottom: 10,
               position: "relative",
               width: "100%",
             }}
@@ -1018,10 +1169,10 @@ export default function App() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                marginBottom: 12,
+                marginBottom: 8,
               }}
             >
-              <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "#9ca3af" }}>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>
                 Price Trend
               </h3>
               <select
@@ -1088,13 +1239,49 @@ export default function App() {
               background: "#7f1d1d",
               border: "1px solid #ef4444",
               color: "#fca5a5",
-              padding: "10px 14px",
+              padding: "8px 12px",
               borderRadius: 6,
-              marginBottom: 16,
-              fontSize: 14,
+              marginBottom: 10,
+              fontSize: 13,
             }}
           >
             {err}
+          </div>
+        )}
+
+        {/* Success Banner */}
+        {successMessage && (
+          <div
+            style={{
+              background: "#065f46",
+              border: "1px solid #10b981",
+              color: "#6ee7b7",
+              padding: "8px 12px",
+              borderRadius: 6,
+              marginBottom: 10,
+              fontSize: 13,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>{successMessage}</span>
+            <button
+              type="button"
+              onClick={() => setSuccessMessage(null)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#6ee7b7",
+                cursor: "pointer",
+                fontSize: 18,
+                lineHeight: 1,
+                padding: 0,
+                marginLeft: 12,
+              }}
+            >
+              ×
+            </button>
           </div>
         )}
 
@@ -1104,8 +1291,8 @@ export default function App() {
             background: "#111827",
             border: "1px solid #1f2937",
             borderRadius: 6,
-            padding: "14px 16px",
-            marginBottom: 20,
+            padding: "10px 12px",
+            marginBottom: 10,
           }}
         >
           <form
@@ -1238,7 +1425,7 @@ export default function App() {
               display: "grid",
               gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
               gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)",
-              gap: 20,
+              gap: 12,
               minHeight: 0,
               minWidth: 0,
               width: "100%",
@@ -1247,8 +1434,8 @@ export default function App() {
             }}
           >
             <OrderBookPanel />
-            <TradesPanel />
             <HistoryPanel />
+            <TradesPanel />
           </div>
         )}
       </div>
