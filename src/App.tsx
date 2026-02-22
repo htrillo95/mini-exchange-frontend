@@ -29,6 +29,24 @@ function formatTime(iso?: string) {
   return d.toLocaleTimeString();
 }
 
+function formatRelativeTime(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  
+  const now = Date.now();
+  const diffMs = now - d.getTime();
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  
+  if (diffSeconds < 5) return "just now";
+  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return d.toLocaleTimeString();
+}
+
 function formatTimeMMSS(iso?: string): string {
   if (!iso) return "--:--";
   const d = new Date(iso);
@@ -233,6 +251,17 @@ export default function App() {
   // Mobile layout tab state: which panel is visible on small screens.
   // Desktop ignores this and shows all panels.
   const [mobileTab, setMobileTab] = useState<"book" | "trades" | "history">("book");
+  
+  // State for relative time updates (updates every 5 seconds)
+  const [, setTimeNow] = useState(Date.now());
+  
+  // Update relative timestamps every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeNow(Date.now());
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Mobile breakpoint detection: width < 768 OR height <= 520
   const [isMobile, setIsMobile] = useState(false);
@@ -287,19 +316,39 @@ export default function App() {
       const filteredBook = bookData.filter((o: Order) => o.quantity > 0);
       setOrderBook(filteredBook);
 
-      // Check for new trades and trigger flash
+      // Check for new trades and trigger flash with direction-based coloring
       if (tradesData.length > 0) {
         const newestTrade = tradesData[0];
         const tradeKey = newestTrade.id || newestTrade.createdAt;
         if (tradeKey && tradeKey !== lastTradeId) {
           setLastTradeId(tradeKey);
-          // Trigger flash animation on the newest trade
+          // Determine trade direction: compare with current buy/sell prices
+          const buyPrices = filteredBook.filter((o: Order) => o.type === "buy").map((o: Order) => o.price);
+          const sellPrices = filteredBook.filter((o: Order) => o.type === "sell").map((o: Order) => o.price);
+          const avgBuy = buyPrices.length > 0 ? buyPrices.reduce((a: number, b: number) => a + b, 0) / buyPrices.length : 0;
+          const avgSell = sellPrices.length > 0 ? sellPrices.reduce((a: number, b: number) => a + b, 0) / sellPrices.length : 0;
+          const midpoint = avgBuy > 0 && avgSell > 0 ? (avgBuy + avgSell) / 2 : newestTrade.price;
+          const isBuySide = newestTrade.price >= midpoint;
+          
+          // Trigger flash animation with direction-based color
           setTimeout(() => {
             const element = flashRefs.current.get(tradeKey);
             if (element) {
               element.style.animation = "none";
               setTimeout(() => {
-                element.style.animation = "flash 800ms ease-out";
+                // Apply direction-based flash: green for buy-side, red for sell-side
+                if (isBuySide) {
+                  element.style.background = "#064e3b";
+                  element.style.borderLeft = "2px solid #10b981";
+                } else {
+                  element.style.background = "#7f1d1d";
+                  element.style.borderLeft = "2px solid #ef4444";
+                }
+                // Fade back to normal after 1.5 seconds
+                setTimeout(() => {
+                  element.style.background = "#0f172a";
+                  element.style.borderLeft = "2px solid #1f2937";
+                }, 1500);
               }, 10);
             }
           }, 100);
@@ -827,6 +876,14 @@ export default function App() {
         <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "400px", overflowY: "auto" }}>
           {sortedTrades.slice(0, tradesVisibleCount).map((t, i) => {
             const tradeKey = t.id || t.createdAt || `trade-${i}`;
+            // Determine trade direction for coloring
+            const buyPrices = buy.map((o) => o.price);
+            const sellPrices = sell.map((o) => o.price);
+            const avgBuy = buyPrices.length > 0 ? buyPrices.reduce((a, b) => a + b, 0) / buyPrices.length : 0;
+            const avgSell = sellPrices.length > 0 ? sellPrices.reduce((a, b) => a + b, 0) / sellPrices.length : 0;
+            const midpoint = avgBuy > 0 && avgSell > 0 ? (avgBuy + avgSell) / 2 : t.price;
+            const isBuySide = t.price >= midpoint;
+            
             return (
               <div
                 key={tradeKey}
@@ -850,11 +907,11 @@ export default function App() {
                     <span style={{ color: "#ef4444" }}>S:{t.sellOrderId}</span>
                   </span>
                   <span style={{ color: "#e5e7eb", whiteSpace: "nowrap" }}>
-                    {t.quantity} @ <span style={{ fontWeight: 600 }}>${t.price}</span>
+                    {t.quantity} @ <span style={{ fontWeight: 600, color: isBuySide ? "#10b981" : "#ef4444" }}>${t.price}</span>
                   </span>
                 </div>
                 {t.createdAt && (
-                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>{formatTime(t.createdAt)}</div>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>{formatRelativeTime(t.createdAt)}</div>
                 )}
               </div>
             );
@@ -1037,7 +1094,7 @@ export default function App() {
                 <div style={{ fontFamily: "monospace", color: "#e5e7eb" }}>${o.price}</div>
                 <div style={{ color: "#e5e7eb" }}>{o.quantity}</div>
                 <div><StatusChip status={o.status} /></div>
-                <div style={{ fontSize: 11, color: "#6b7280" }}>{formatTime(o.createdAt)}</div>
+                <div style={{ fontSize: 11, color: "#6b7280" }}>{formatRelativeTime(o.createdAt)}</div>
               </div>
             ))}
           </div>
@@ -1048,6 +1105,30 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100dvh", background: "#0b0f17", color: "#e5e7eb", width: "100%", maxWidth: "100%" }}>
+      {/* Simulation Banner */}
+      <div
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          width: "100%",
+          background: "#78350f",
+          color: "#fef3c7",
+          padding: "8px 16px",
+          textAlign: "center",
+          fontSize: 13,
+          fontWeight: 500,
+          zIndex: 1000,
+          borderBottom: "1px solid #92400e",
+        }}
+      >
+        SIMULATION — This is a demo market/exchange built for learning purposes. Orders, liquidity, and trades are not real.
+      </div>
+      
+      {/* Spacer to push content down */}
+      <div style={{ height: 40 }} />
+      
       {/* Header Bar */}
       <div
         style={{
