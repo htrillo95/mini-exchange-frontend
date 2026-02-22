@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+
 type OrderStatus = "OPEN" | "PARTIAL" | "FILLED" | "CANCELED";
 
 type Order = {
@@ -229,9 +231,9 @@ export default function App() {
       setErr(null);
 
       const [bookRes, tradesRes, historyRes] = await Promise.all([
-        fetch("http://localhost:4000/api/orders/open?limit=200"),
-        fetch("http://localhost:4000/api/orders/trades/db?limit=200"),
-        fetch("http://localhost:4000/api/orders/history?limit=50"),
+        fetch(`${API_BASE_URL}/api/orders/open?limit=200`),
+        fetch(`${API_BASE_URL}/api/orders/trades/db?limit=200`),
+        fetch(`${API_BASE_URL}/api/orders/history?limit=50`),
       ]);
 
       if (!bookRes.ok) throw new Error("Failed to fetch order book");
@@ -309,7 +311,7 @@ export default function App() {
         return;
       }
 
-      const res = await fetch("http://localhost:4000/api/orders", {
+      const res = await fetch(`${API_BASE_URL}/api/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: form.type, price, quantity }),
@@ -334,7 +336,7 @@ export default function App() {
     setErr(null);
 
     try {
-      const res = await fetch(`http://localhost:4000/api/orders/${id}`, {
+      const res = await fetch(`${API_BASE_URL}/api/orders/${id}`, {
         method: "DELETE",
       });
 
@@ -442,7 +444,7 @@ export default function App() {
       const price = Math.max(0.01, Math.round((midpoint + jitter) * 100) / 100);
       const quantity = Math.floor(Math.random() * 5) + 1; // 1-5
 
-      const res = await fetch("http://localhost:4000/api/orders", {
+      const res = await fetch(`${API_BASE_URL}/api/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type, price, quantity }),
