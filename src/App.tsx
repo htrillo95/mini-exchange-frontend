@@ -11,6 +11,7 @@ type Order = {
   quantity: number;
   status: OrderStatus;
   createdAt?: string;
+  originalQuantity?: number;
 };
 
 type Trade = {
@@ -734,6 +735,16 @@ export default function App() {
                   <div style={{ color: "#e5e7eb", marginBottom: 2 }}>
                     <span style={{ color: "#10b981", fontWeight: 600 }}>{o.quantity}</span>{" "}
                     @ <span style={{ fontFamily: "monospace" }}>${o.price}</span>
+                    {myOrderIds.has(String(o.id)) && (() => {
+                      const qty = o.originalQuantity ?? o.quantity;
+                      const remain = o.quantity;
+                      const filled = Math.max(0, qty - remain);
+  return (
+                        <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+                          Filled {Math.floor(filled)} / Qty {Math.floor(qty)}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {(o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
@@ -773,12 +784,12 @@ export default function App() {
           ) : (
                   <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "500px", overflowY: "auto" }}>
                     {sell.slice(0, bookVisibleCount).map((o) => (
-                <div
+        <div
                   key={o.id}
-                  style={{
+          style={{
                     background: myOrderIds.has(String(o.id)) ? "#1e3a8a" : "#0f172a",
                     border: myOrderIds.has(String(o.id)) ? "1px solid #3b82f6" : "1px solid #1e293b",
-                    padding: "8px 10px",
+            padding: "8px 10px",
                     borderRadius: 4,
                     fontSize: 12,
                     minWidth: 0,
@@ -805,13 +816,23 @@ export default function App() {
                           YOU
                         </span>
                       )}
-                    </div>
+        </div>
                     <StatusChip status={o.status} />
                   </div>
 
                   <div style={{ color: "#e5e7eb", marginBottom: 2 }}>
                     <span style={{ color: "#ef4444", fontWeight: 600 }}>{o.quantity}</span>{" "}
                     @ <span style={{ fontFamily: "monospace" }}>${o.price}</span>
+                    {myOrderIds.has(String(o.id)) && (() => {
+                      const qty = o.originalQuantity ?? o.quantity;
+                      const remain = o.quantity;
+                      const filled = Math.max(0, qty - remain);
+                      return (
+                        <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+                          Filled {Math.floor(filled)} / Qty {Math.floor(qty)}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {(o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
@@ -853,7 +874,7 @@ export default function App() {
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "#f9fafb" }}>Trades</h3>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12, color: "#9ca3af" }}>Rows:</span>
-          <select
+        <select
             value={tradesVisibleCount}
             onChange={(e) => setTradesVisibleCount(Number(e.target.value))}
             className="input-terminal"
@@ -862,11 +883,11 @@ export default function App() {
               fontSize: 12,
               minWidth: 80,
             }}
-          >
+        >
             <option value={15}>15</option>
             <option value={30}>30</option>
             <option value={50}>50</option>
-          </select>
+        </select>
         </div>
       </div>
 
@@ -957,9 +978,9 @@ export default function App() {
               }}
             >
               All
-            </button>
-            <button
-              type="button"
+        </button>
+        <button
+          type="button"
               onClick={() => setHistoryFilter("open")}
               style={{
                 padding: "4px 8px",
@@ -971,9 +992,9 @@ export default function App() {
                 borderRadius: 3,
                 cursor: "pointer",
               }}
-            >
+        >
               Open
-            </button>
+        </button>
             <button
               type="button"
               onClick={() => setHistoryFilter("filled")}
@@ -1035,9 +1056,9 @@ export default function App() {
           {/* Desktop header row only (we'll hide on mobile in CSS) */}
           <div
             className="history-header"
-            style={{
+        style={{
               display: "grid",
-              gridTemplateColumns: "100px 60px 70px 70px 100px 1fr",
+              gridTemplateColumns: "100px 60px 70px 55px 55px 60px 100px 1fr",
               gap: 10,
               padding: "8px 10px",
               background: "#0f172a",
@@ -1050,7 +1071,7 @@ export default function App() {
               letterSpacing: 0.5,
             }}
           >
-            <div>ID</div><div>Type</div><div>Price</div><div>Qty</div><div>Status</div><div>Created</div>
+            <div>ID</div><div>Type</div><div>Price</div><div>Qty</div><div>Filled</div><div>Remain</div><div>Status</div><div>Created</div>
           </div>
 
           <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "400px", overflowY: "auto" }}>
@@ -1060,7 +1081,7 @@ export default function App() {
                 className="history-row"
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "100px 60px 70px 70px 100px 1fr",
+                  gridTemplateColumns: "100px 60px 70px 55px 55px 60px 100px 1fr",
                   gap: 10,
                   padding: "8px 10px",
                   background: myOrderIds.has(String(o.id)) ? "#1e3a8a" : "#0f172a",
@@ -1092,7 +1113,18 @@ export default function App() {
                 </div>
                 <div style={{ fontWeight: 600, color: o.type === "buy" ? "#10b981" : "#ef4444" }}>{o.type.toUpperCase()}</div>
                 <div style={{ fontFamily: "monospace", color: "#e5e7eb" }}>${o.price}</div>
-                <div style={{ color: "#e5e7eb" }}>{o.quantity}</div>
+                {(() => {
+                  const qty = o.originalQuantity ?? o.quantity;
+                  const remain = o.quantity;
+                  const filled = Math.max(0, qty - remain);
+                  return (
+                    <>
+                      <div style={{ color: "#e5e7eb" }}>{Math.floor(qty)}</div>
+                      <div style={{ color: "#e5e7eb" }}>{Math.floor(filled)}</div>
+                      <div style={{ color: "#e5e7eb" }}>{Math.floor(remain)}</div>
+                    </>
+                  );
+                })()}
                 <div><StatusChip status={o.status} /></div>
                 <div style={{ fontSize: 11, color: "#6b7280" }}>{formatRelativeTime(o.createdAt)}</div>
               </div>
@@ -1105,29 +1137,41 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100dvh", background: "#0b0f17", color: "#e5e7eb", width: "100%", maxWidth: "100%" }}>
-      {/* Simulation Banner */}
+      {/* Scrolling Ticker Banner */}
       <div
+        className="ticker-banner"
         style={{
           position: "fixed",
           top: 0,
           left: 0,
           right: 0,
           width: "100%",
-          background: "#78350f",
-          color: "#fef3c7",
-          padding: "8px 16px",
-          textAlign: "center",
-          fontSize: 13,
-          fontWeight: 500,
-          zIndex: 1000,
-          borderBottom: "1px solid #92400e",
+          height: "38px",
+          background: "#0b0f17",
+          borderBottom: "1px solid #1f2937",
+          overflow: "hidden",
+          zIndex: 1001,
+          display: "flex",
+          alignItems: "center",
         }}
       >
-        SIMULATION — This is a demo market/exchange built for learning purposes. Orders, liquidity, and trades are not real.
+        <div className="ticker-content">
+          <span className="ticker-text">
+            DEMO PROJECT A simulated market environment built to study exchange mechanics, order flow, and trading interfaces. All activity is synthetic and for demonstration only.
+          </span>
+          <span className="ticker-separator"> • </span>
+          <span className="ticker-text">
+            DEMO PROJECT A simulated market environment built to study exchange mechanics, order flow, and trading interfaces. All activity is synthetic and for demonstration only.
+          </span>
+          <span className="ticker-separator"> • </span>
+          <span className="ticker-text">
+            DEMO PROJECT A simulated market environment built to study exchange mechanics, order flow, and trading interfaces. All activity is synthetic and for demonstration only.
+          </span>
+        </div>
       </div>
       
-      {/* Spacer to push content down */}
-      <div style={{ height: 40 }} />
+      {/* Spacer to push content down (ticker banner) */}
+      <div style={{ height: 38 }} />
       
       {/* Header Bar */}
       <div
@@ -1152,30 +1196,30 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
             <span style={{ color: "#9ca3af" }}>
               {buy.length} buys • {sell.length} sells • {totalTrades} trades
-            </span>
+        </span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div
-              style={{
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div
+            style={{
                 background: isActive ? "#10b981" : "#6b7280",
-                borderRadius: "50%",
+              borderRadius: "50%",
                 width: 8,
                 height: 8,
-                animation: isActive ? "pulse 1.2s infinite" : "none",
-              }}
-            />
-            <span
-              style={{
+              animation: isActive ? "pulse 1.2s infinite" : "none",
+            }}
+          />
+          <span
+            style={{
                 fontSize: 12,
-                fontWeight: 700,
+              fontWeight: 700,
                 color: isActive ? "#10b981" : "#9ca3af",
-                letterSpacing: 0.5,
-              }}
-            >
-              {isActive ? "LIVE" : "IDLE"}
-            </span>
-          </div>
+              letterSpacing: 0.5,
+            }}
+          >
+            {isActive ? "LIVE" : "IDLE"}
+          </span>
+      </div>
 
           <button
             type="button"
@@ -1227,19 +1271,19 @@ export default function App() {
       <div style={{ maxWidth: "100%", margin: "0 auto", padding: "12px", width: "100%" }} className="mobile-compact">
         {/* Demo Ticker Bar */}
         <div
-          style={{
+              style={{
             background: "#111827",
             border: "1px solid #1f2937",
             borderRadius: 6,
             padding: "8px 12px",
             marginBottom: 10,
-            display: "flex",
-            alignItems: "center",
+                display: "flex",
+                alignItems: "center",
             gap: 16,
             flexWrap: "wrap",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb" }}>$DEMO</span>
             <span
               style={{
@@ -1253,15 +1297,15 @@ export default function App() {
             >
               SIMULATED
             </span>
-          </div>
+                </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <div>
               <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Last</div>
               <div style={{ fontSize: 16, fontWeight: 600, color: "#e5e7eb", fontFamily: "monospace" }}>
                 ${tickerData.lastPrice.toFixed(2)}
+                </div>
               </div>
-            </div>
 
             <div>
               <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Change</div>
@@ -1276,8 +1320,8 @@ export default function App() {
                 {tickerData.change >= 0 ? "+" : ""}
                 {tickerData.change.toFixed(2)} ({tickerData.changePercent >= 0 ? "+" : ""}
                 {tickerData.changePercent.toFixed(2)}%)
-              </div>
             </div>
+        </div>
 
             <div>
               <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Rolling Avg (20)</div>
@@ -1334,7 +1378,7 @@ export default function App() {
                 <option value={300000}>5m</option>
                 <option value="ALL">All</option>
               </select>
-            </div>
+                </div>
 
             {/* Caption */}
             <div
@@ -1365,27 +1409,27 @@ export default function App() {
                 ? "5m"
                 : "Unknown"}
               {chartTrades.usedFallback && " (fallback)"}
-            </div>
+                </div>
 
             <MiniChart trades={chartTrades.trades} usedFallback={chartTrades.usedFallback} isMobile={isMobile} />
-          </div>
+              </div>
         )}
 
         {/* Error Banner */}
         {err && (
           <div
-            style={{
+                style={{
               background: "#7f1d1d",
               border: "1px solid #ef4444",
               color: "#fca5a5",
               padding: "8px 12px",
-              borderRadius: 6,
+                  borderRadius: 6,
               marginBottom: 10,
               fontSize: 13,
-            }}
-          >
+                }}
+              >
             {err}
-          </div>
+            </div>
         )}
 
         {/* Success Banner */}
@@ -1502,14 +1546,14 @@ export default function App() {
             style={{
               flex: 1,
               padding: "8px 10px",
-              fontSize: 13,
+            fontSize: 13,
               border: "1px solid",
               borderColor: mobileTab === "book" ? "#3b82f6" : "#374151",
               background: mobileTab === "book" ? "#1f2937" : "#111827",
               color: mobileTab === "book" ? "#e5e7eb" : "#9ca3af",
               cursor: "pointer",
-            }}
-          >
+          }}
+        >
             Order Book
           </button>
           <button
@@ -1575,9 +1619,9 @@ export default function App() {
             <OrderBookPanel />
             <HistoryPanel />
             <TradesPanel />
-          </div>
+            </div>
         )}
-      </div>
+            </div>
 
       <style>{`
         .input-terminal {

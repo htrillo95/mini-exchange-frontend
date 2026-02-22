@@ -42,6 +42,15 @@ code {
   100% { opacity: 1; }
 }
 
+@keyframes ticker-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
 @keyframes flash {
   0% {
     border-left-color: #10b981;
@@ -181,4 +190,70 @@ code {
 .panel-scroll {
   scrollbar-width: thin;
   scrollbar-color: #374151 #0f172a;
+}
+
+/* Scrolling Ticker Banner */
+.ticker-banner {
+  user-select: none;
+}
+
+.ticker-content {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: ticker-scroll 60s linear infinite;
+  will-change: transform;
+}
+
+.ticker-banner:hover .ticker-content {
+  animation-play-state: paused;
+}
+
+.ticker-text {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  font-size: 12px;
+  color: #d1d5db;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.ticker-separator {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  font-size: 12px;
+  color: #6b7280;
+  margin: 0 16px;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .ticker-content {
+    animation: none !important;
+    transform: none !important;
+  }
+  
+  .ticker-banner {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  
+  .ticker-separator {
+    display: none;
+  }
+  
+  .ticker-text:not(:first-of-type) {
+    display: none;
+  }
+}
+
+/* Mobile: slightly faster for readability */
+@media (max-width: 767px) {
+  .ticker-content {
+    animation-duration: 45s;
+  }
+  
+  .ticker-text {
+    font-size: 11px;
+  }
 }
