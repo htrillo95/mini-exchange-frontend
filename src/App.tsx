@@ -326,15 +326,15 @@ export default function App() {
       }
 
       const orderData = await res.json().catch(() => null);
-      const orderId = orderData?.id || orderData?.orderId || null;
+      const orderId =
+        orderData?.order?.id ??
+        orderData?.id ??
+        orderData?.orderId ??
+        null;
       
-      // Track user's order ID
+      // Track user's order ID (only real backend IDs, normalized to string)
       if (orderId) {
-        setMyOrderIds((prev) => new Set(Array.from(prev).concat(orderId)));
-      } else {
-        // Fallback: derive from payload + timestamp if no ID returned
-        const fallbackId = `${form.type}-${price}-${quantity}-${Date.now()}`;
-        setMyOrderIds((prev) => new Set(Array.from(prev).concat(fallbackId)));
+        setMyOrderIds((prev) => new Set(Array.from(prev).concat(String(orderId))));
       }
 
       setForm({ type: "buy", price: "", quantity: "" });
@@ -606,8 +606,8 @@ export default function App() {
                 <div
                   key={o.id}
                   style={{
-                    background: myOrderIds.has(o.id) ? "#1e3a8a" : "#0f172a",
-                    border: myOrderIds.has(o.id) ? "1px solid #3b82f6" : "1px solid #1e293b",
+                    background: myOrderIds.has(String(o.id)) ? "#1e3a8a" : "#0f172a",
+                    border: myOrderIds.has(String(o.id)) ? "1px solid #3b82f6" : "1px solid #1e293b",
                     padding: "8px 10px",
                     borderRadius: 4,
                     fontSize: 12,
@@ -620,7 +620,7 @@ export default function App() {
                       <span className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af", minWidth: 0 }}>
                         #{o.id}
                       </span>
-                      {myOrderIds.has(o.id) && (
+                      {myOrderIds.has(String(o.id)) && (
                         <span
                           style={{
                             fontSize: 9,
@@ -644,7 +644,7 @@ export default function App() {
                     @ <span style={{ fontFamily: "monospace" }}>${o.price}</span>
                   </div>
 
-                  {(o.status === "OPEN" || o.status === "PARTIAL") && (
+                  {(o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
                     <button
                       onClick={() => cancelOrder(o.id)}
                       disabled={loading}
@@ -684,8 +684,8 @@ export default function App() {
                 <div
                   key={o.id}
                   style={{
-                    background: myOrderIds.has(o.id) ? "#1e3a8a" : "#0f172a",
-                    border: myOrderIds.has(o.id) ? "1px solid #3b82f6" : "1px solid #1e293b",
+                    background: myOrderIds.has(String(o.id)) ? "#1e3a8a" : "#0f172a",
+                    border: myOrderIds.has(String(o.id)) ? "1px solid #3b82f6" : "1px solid #1e293b",
                     padding: "8px 10px",
                     borderRadius: 4,
                     fontSize: 12,
@@ -698,7 +698,7 @@ export default function App() {
                       <span className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af", minWidth: 0 }}>
                         #{o.id}
                       </span>
-                      {myOrderIds.has(o.id) && (
+                      {myOrderIds.has(String(o.id)) && (
                         <span
                           style={{
                             fontSize: 9,
@@ -722,7 +722,7 @@ export default function App() {
                     @ <span style={{ fontFamily: "monospace" }}>${o.price}</span>
                   </div>
 
-                  {(o.status === "OPEN" || o.status === "PARTIAL") && (
+                  {(o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
                     <button
                       onClick={() => cancelOrder(o.id)}
                       disabled={loading}
@@ -948,8 +948,8 @@ export default function App() {
                   gridTemplateColumns: "100px 60px 70px 70px 100px 1fr",
                   gap: 10,
                   padding: "8px 10px",
-                  background: myOrderIds.has(o.id) ? "#1e3a8a" : "#0f172a",
-                  border: myOrderIds.has(o.id) ? "1px solid #3b82f6" : "1px solid #1e293b",
+                  background: myOrderIds.has(String(o.id)) ? "#1e3a8a" : "#0f172a",
+                  border: myOrderIds.has(String(o.id)) ? "1px solid #3b82f6" : "1px solid #1e293b",
                   borderRadius: 4,
                   fontSize: 12,
                   alignItems: "center",
@@ -959,7 +959,7 @@ export default function App() {
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div className="mono-id" style={{ fontFamily: "monospace", color: "#9ca3af" }}>#{o.id}</div>
-                  {myOrderIds.has(o.id) && (
+                  {myOrderIds.has(String(o.id)) && (
                     <span
                       style={{
                         fontSize: 9,
