@@ -277,61 +277,130 @@ export default function App() {
   const [bookVisibleCount, setBookVisibleCount] = useState(20);
   const [historyVisibleCount, setHistoryVisibleCount] = useState(30);
 
+  const getToken = () => localStorage.getItem("token");
+  const isAuthed = Boolean(getToken());
+
+  const authHeaders = (): Record<string, string> => {
+    const token = getToken();
+    if (!token) return {};
+    return { Authorization: `Bearer ${token}` };
+  };
+
+  // ======================
+  // AUTH UI STATE + HELPERS
+  // ======================
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [currentUser, setCurrentUser] = useState<{ email: string } | null>(null);
+  
+  const logout = () => {
+    localStorage.removeItem("token");
+    setCurrentUser(null);
+    setMineOnly(false); // avoids protected history calls
+    setSuccessMessage("Logged out");
+    setTimeout(() => setSuccessMessage(null), 2000);
+  };
+  
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setErr(null);
+  
+    try {
+      const endpoint =
+        authMode === "login"
+          ? `${API_BASE_URL}/auth/login`
+          : `${API_BASE_URL}/auth/register`;
+  
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
+      });
+  
+      if (!res.ok) {
+        const msg = await res.json().catch(() => null);
+        throw new Error(msg?.error || "Auth failed");
+      }
+  
+      const data = await res.json();
+      if (data?.token) localStorage.setItem("token", data.token);
+  
+      const email = data?.user?.email || authEmail;
+      setCurrentUser({ email });
+      setAuthPassword("");
+      setSuccessMessage(`${authMode === "login" ? "Logged in" : "Registered"} as ${email}`);
+      setTimeout(() => setSuccessMessage(null), 3000);
+  
+      await fetchAllData();
+    } catch (e: any) {
+      setErr(e?.message || "Auth failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const fetchAllData = async () => {
     try {
       setErr(null);
-
-      // Determine which history endpoint to use based on mineOnly toggle
-      let historyUrl: string;
+  
+      const token = getToken();
+      const isAuthed = Boolean(token);
+      const headers = authHeaders(); // empty if no token
+  
+      // history url (only meaningful when authed)
+      let historyUrl = `${API_BASE_URL}/api/orders/history?limit=50`;
       if (mineOnly && myOrderIds.size > 0) {
-        // Fetch orders by IDs when Mine toggle is ON
-        const idsArray = Array.from(myOrderIds);
-        const idsParam = idsArray.join(",");
+        const idsParam = Array.from(myOrderIds).join(",");
         historyUrl = `${API_BASE_URL}/api/orders/by-ids?ids=${idsParam}`;
-      } else {
-        // Use normal history endpoint when Mine toggle is OFF
-        historyUrl = `${API_BASE_URL}/api/orders/history?limit=50`;
       }
-
+  
+      const bookUrl = isAuthed
+        ? `${API_BASE_URL}/api/orders/open?limit=200` // protected
+        : `${API_BASE_URL}/api/orders/book`;          // public
+  
       const [bookRes, tradesRes, historyRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/orders/open?limit=200`),
+        fetch(bookUrl, isAuthed ? { headers } : undefined),
         fetch(`${API_BASE_URL}/api/orders/trades/db?limit=200`),
-        fetch(historyUrl),
+        isAuthed ? fetch(historyUrl, { headers }) : Promise.resolve(null),
       ]);
-
+  
       if (!bookRes.ok) throw new Error("Failed to fetch order book");
       if (!tradesRes.ok) throw new Error("Failed to fetch trades");
-      if (!historyRes.ok) throw new Error("Failed to fetch order history");
-
+      if (isAuthed && historyRes && !historyRes.ok) throw new Error("Failed to fetch order history");
+  
       const bookData = await bookRes.json();
       const tradesData = await tradesRes.json();
-      const historyData = await historyRes.json();
-
-      // Defensive filter: quantity > 0
-      const filteredBook = bookData.filter((o: Order) => o.quantity > 0);
+      const historyData = isAuthed && historyRes ? await historyRes.json() : [];
+  
+      // If guest + /book returns {buy:[], sell:[]}, flatten to one array like your UI expects
+      const normalizedBook: Order[] = Array.isArray(bookData)
+        ? bookData
+        : [...(bookData.buy || []), ...(bookData.sell || [])];
+  
+      const filteredBook = normalizedBook.filter((o: Order) => o.quantity > 0);
       setOrderBook(filteredBook);
-
-      // Check for new trades and trigger flash with direction-based coloring
+  
+      // flash logic (unchanged)
       if (tradesData.length > 0) {
         const newestTrade = tradesData[0];
         const tradeKey = newestTrade.id || newestTrade.createdAt;
         if (tradeKey && tradeKey !== lastTradeId) {
           setLastTradeId(tradeKey);
-          // Determine trade direction: compare with current buy/sell prices
+  
           const buyPrices = filteredBook.filter((o: Order) => o.type === "buy").map((o: Order) => o.price);
           const sellPrices = filteredBook.filter((o: Order) => o.type === "sell").map((o: Order) => o.price);
-          const avgBuy = buyPrices.length > 0 ? buyPrices.reduce((a: number, b: number) => a + b, 0) / buyPrices.length : 0;
-          const avgSell = sellPrices.length > 0 ? sellPrices.reduce((a: number, b: number) => a + b, 0) / sellPrices.length : 0;
+          const avgBuy = buyPrices.length ? buyPrices.reduce((a: number, b: number) => a + b, 0) / buyPrices.length : 0;
+          const avgSell = sellPrices.length ? sellPrices.reduce((a: number, b: number) => a + b, 0) / sellPrices.length : 0;
           const midpoint = avgBuy > 0 && avgSell > 0 ? (avgBuy + avgSell) / 2 : newestTrade.price;
           const isBuySide = newestTrade.price >= midpoint;
-          
-          // Trigger flash animation with direction-based color
+  
           setTimeout(() => {
             const element = flashRefs.current.get(tradeKey);
             if (element) {
               element.style.animation = "none";
               setTimeout(() => {
-                // Apply direction-based flash: green for buy-side, red for sell-side
                 if (isBuySide) {
                   element.style.background = "#064e3b";
                   element.style.borderLeft = "2px solid #10b981";
@@ -339,7 +408,6 @@ export default function App() {
                   element.style.background = "#7f1d1d";
                   element.style.borderLeft = "2px solid #ef4444";
                 }
-                // Fade back to normal after 1.5 seconds
                 setTimeout(() => {
                   element.style.background = "#0f172a";
                   element.style.borderLeft = "2px solid #1f2937";
@@ -349,7 +417,7 @@ export default function App() {
           }, 100);
         }
       }
-
+  
       setTrades(tradesData);
       setOrderHistory(historyData);
     } catch (e: any) {
@@ -364,7 +432,21 @@ export default function App() {
     const interval = setInterval(fetchAllData, 2000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mineOnly, myOrderIds]);
+  }, [mineOnly, myOrderIds.size]);
+
+  // Hydrate logged-in user on page refresh (if token exists)
+useEffect(() => {
+  const token = getToken();
+  if (!token) return;
+
+  fetch(`${API_BASE_URL}/auth/me`, { headers: authHeaders() })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (data?.user?.email) setCurrentUser({ email: data.user.email });
+    })
+    .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   // Build order book: separate buy/sell, sort
   const { buy, sell } = useMemo(() => {
@@ -395,9 +477,18 @@ export default function App() {
         return;
       }
 
-      const res = await fetch(`${API_BASE_URL}/api/orders`, {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      };
+      
+      const endpoint = getToken()
+        ? `${API_BASE_URL}/api/orders`
+        : `${API_BASE_URL}/api/orders/demo`;
+
+      const res = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ type: form.type, price, quantity }),
       });
 
@@ -414,7 +505,7 @@ export default function App() {
         null;
       
       // Track user's order ID (only real backend IDs, normalized to string)
-      if (orderId) {
+      if (orderId && getToken()) {
         setMyOrderIds((prev) => new Set(Array.from(prev).concat(String(orderId))));
       }
 
@@ -423,18 +514,30 @@ export default function App() {
       setTimeout(() => setSuccessMessage(null), 4000);
       await fetchAllData();
       
-      // Check if order was immediately filled
+      // Check if order was immediately filled (auth users only)
       setTimeout(async () => {
+        if (!getToken()) return; // <-- prevents guest 401
+
         await fetchAllData();
-        const updatedHistory = await fetch(`${API_BASE_URL}/api/orders/history?limit=50`).then(r => r.json()).catch(() => []);
+
+        const updatedHistory = await fetch(
+          `${API_BASE_URL}/api/orders/history?limit=50`,
+          { headers: authHeaders() }
+        )
+          .then((r) => r.json())
+          .catch(() => []);
+
         if (orderId) {
-          const filledOrder = updatedHistory.find((o: Order) => o.id === orderId && o.status === "FILLED");
+          const filledOrder = updatedHistory.find(
+            (o: Order) => String(o.id) === String(orderId) && o.status === "FILLED"
+          );
           if (filledOrder) {
             setSuccessMessage(`Order ${orderId} filled!`);
             setTimeout(() => setSuccessMessage(null), 4000);
           }
         }
       }, 500);
+
     } catch (e: any) {
       setErr(e?.message || "Submit failed");
     } finally {
@@ -449,6 +552,7 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE_URL}/api/orders/${id}`, {
         method: "DELETE",
+        headers: authHeaders(),
       });
 
       if (!res.ok) {
@@ -573,7 +677,7 @@ export default function App() {
       const price = Math.max(0.01, Math.round((midpoint + jitter) * 100) / 100);
       const quantity = Math.floor(Math.random() * 5) + 1; // 1-5
 
-      const res = await fetch(`${API_BASE_URL}/api/orders`, {
+      const res = await fetch(`${API_BASE_URL}/api/orders/demo`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type, price, quantity }),
@@ -1007,6 +1111,7 @@ export default function App() {
             </button>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {isAuthed && (
             <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "#9ca3af" }}>
               <input
                 type="checkbox"
@@ -1016,6 +1121,7 @@ export default function App() {
               />
               <span>Mine</span>
             </label>
+          )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 12, color: "#9ca3af" }}>Rows:</span>
@@ -1042,7 +1148,7 @@ export default function App() {
           {orderHistory.length === 0 
             ? (mineOnly && myOrderIds.size === 0 
                 ? "No orders tracked" 
-                : "No orders yet")
+                : (isAuthed ? "No orders yet" : "Log in to view your order history"))
             : `No ${historyFilter === "all" ? "" : historyFilter} orders`}
         </div>
       ) : (
@@ -1182,9 +1288,28 @@ export default function App() {
         }}
         className="mobile-compact-header"
       >
-        <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>
-          Mini Exchange
-        </h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+  <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>
+    Mini Exchange
+  </h1>
+
+  {!isAuthed && (
+    <span
+      style={{
+        fontSize: 10,
+        padding: "2px 6px",
+        background: "#78350f",
+        color: "#fcd34d",
+        border: "1px solid #f59e0b",
+        borderRadius: 4,
+        fontWeight: 700,
+        letterSpacing: 0.5,
+      }}
+    >
+      GUEST
+    </span>
+  )}
+</div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
@@ -1239,7 +1364,7 @@ export default function App() {
                 style={{ cursor: "pointer" }}
               />
               <span style={{ color: demoMode ? "#fbbf24" : "#9ca3af", fontWeight: demoMode ? 600 : 400 }}>
-                Demo Mode
+                Simulated Market (Bots)
               </span>
             </label>
             {demoMode && (
