@@ -24,13 +24,6 @@ type Trade = {
   createdAt?: string;
 };
 
-function formatTime(iso?: string) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString();
-}
-
 function formatRelativeTime(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
