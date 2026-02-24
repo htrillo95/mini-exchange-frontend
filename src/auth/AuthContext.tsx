@@ -15,6 +15,9 @@ interface AuthContextType {
   logout: () => void;
   refreshMe: () => Promise<void>;
   loading: boolean;
+  authFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  sessionNotice: string | null;
+  setSessionNotice: (value: string | null) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,8 +28,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
   const isAuthed = Boolean(token);
+
+  const handleUnauthorized = () => {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem("token");
+    setSessionNotice("Session expired. Please sign in again.");
+  };
 
   // Load user on mount if token exists
   useEffect(() => {
@@ -64,15 +75,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser({ email: data.user.email });
         }
       } else if (res.status === 401) {
-        // Token invalid, clear everything
-        setToken(null);
-        setUser(null);
-        localStorage.removeItem("token");
+        // Token invalid, clear everything and surface session expiry
+        handleUnauthorized();
       }
     } catch (e) {
       console.error("Failed to refresh user", e);
       // On network error, don't clear token (might be temporary)
     }
+  };
+
+  const authFetch: AuthContextType["authFetch"] = async (input, init) => {
+    const headers = new Headers((init && init.headers) || undefined);
+    if (token && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    const response = await fetch(input, {
+      ...init,
+      headers,
+    });
+
+    if (response.status === 401) {
+      // Any protected call returning 401 should behave as session expiry
+      handleUnauthorized();
+    }
+
+    return response;
   };
 
   const login = async (email: string, password: string) => {
@@ -166,6 +194,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         refreshMe,
         loading,
+        authFetch,
+        sessionNotice,
+        setSessionNotice,
       }}
     >
       {children}

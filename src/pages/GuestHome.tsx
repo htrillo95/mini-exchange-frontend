@@ -77,7 +77,7 @@ export default function GuestHome() {
           }}
         >
           <button
-            onClick={() => navigate("/app")}
+            onClick={() => navigate("/demo")}
             className="btn-primary"
             style={{
               padding: "12px 24px",
@@ -86,10 +86,10 @@ export default function GuestHome() {
               width: "100%",
             }}
           >
-            Enter Exchange
+            Enter Exchange (Demo)
           </button>
           <button
-            onClick={() => navigate("/auth")}
+            onClick={() => navigate("/auth?next=/app")}
             className="btn-secondary"
             style={{
               padding: "12px 24px",

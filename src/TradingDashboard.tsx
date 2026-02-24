@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { AuthWidget } from "./components/AuthWidget";
 import { useAuth } from "./auth/AuthContext";
 import ConfirmModal from "./components/ConfirmModal";
+import useSmartPolling from "./hooks/useSmartPolling";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 // Trigger redeploy
@@ -221,6 +222,8 @@ interface ViewProps {
   OrderBookPanel: () => React.ReactElement;
   TradesPanel: () => React.ReactElement;
   HistoryPanel: () => React.ReactElement;
+  showOrderForm: boolean;
+  onSignInClick: () => void;
 }
 
 function GuestView(props: ViewProps) {
@@ -242,6 +245,8 @@ function GuestView(props: ViewProps) {
     OrderBookPanel,
     TradesPanel,
     HistoryPanel,
+    showOrderForm,
+    onSignInClick,
   } = props;
 
   return (
@@ -424,67 +429,96 @@ function GuestView(props: ViewProps) {
       )}
 
       {/* Order Form - Compact Ticket */}
-      <div
-        style={{
-          background: "#111827",
-          border: "1px solid #1f2937",
-          borderRadius: 6,
-          padding: "10px 12px",
-          marginBottom: 10,
-        }}
-      >
-        <form
-          onSubmit={submitOrder}
+      {showOrderForm ? (
+        <div
           style={{
+            background: "#111827",
+            border: "1px solid #1f2937",
+            borderRadius: 6,
+            padding: "10px 12px",
+            marginBottom: 10,
+          }}
+        >
+          <form
+            onSubmit={submitOrder}
+            style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <select
+              value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value as "buy" | "sell" })}
+              className="input-terminal"
+              style={{ minWidth: 80 }}
+            >
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+
+            <input
+              type="number"
+              placeholder="Price"
+              value={form.price}
+              onChange={(e) => setForm({ ...form, price: e.target.value })}
+              className="input-terminal"
+              required
+              min={0}
+              step="0.01"
+              style={{ width: 120 }}
+            />
+
+            <input
+              type="number"
+              placeholder="Quantity"
+              value={form.quantity}
+              onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+              className="input-terminal"
+              required
+              min={1}
+              style={{ width: 120 }}
+            />
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary"
+              style={{ minWidth: 120 }}
+            >
+              {loading ? "Working..." : "Submit Order"}
+            </button>
+          </form>
+        </div>
+      ) : (
+        <div
+          style={{
+            background: "#111827",
+            border: "1px solid #1f2937",
+            borderRadius: 6,
+            padding: "10px 12px",
+            marginBottom: 10,
             display: "flex",
-            gap: 10,
             alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
             flexWrap: "wrap",
           }}
         >
-          <select
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value as "buy" | "sell" })}
-            className="input-terminal"
-            style={{ minWidth: 80 }}
-          >
-            <option value="buy">Buy</option>
-            <option value="sell">Sell</option>
-          </select>
-
-          <input
-            type="number"
-            placeholder="Price"
-            value={form.price}
-            onChange={(e) => setForm({ ...form, price: e.target.value })}
-            className="input-terminal"
-            required
-            min={0}
-            step="0.01"
-            style={{ width: 120 }}
-          />
-
-          <input
-            type="number"
-            placeholder="Quantity"
-            value={form.quantity}
-            onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-            className="input-terminal"
-            required
-            min={1}
-            style={{ width: 120 }}
-          />
-
+          <div style={{ fontSize: 13, color: "#e5e7eb" }}>
+            Demo mode is read-only. Sign in to place real or simulated orders.
+          </div>
           <button
-            type="submit"
-            disabled={loading}
+            type="button"
+            onClick={onSignInClick}
             className="btn-primary"
-            style={{ minWidth: 120 }}
+            style={{ minWidth: 140, fontSize: 13, fontWeight: 600 }}
           >
-            {loading ? "Working..." : "Submit Order"}
+            Sign in to trade
           </button>
-        </form>
-      </div>
+        </div>
+      )}
 
       {/* 
         Mobile Tab Bar
@@ -937,9 +971,13 @@ function AuthedView(props: ViewProps) {
   );
 }
 
-export default function TradingDashboard() {
+type TradingDashboardProps = {
+  mode?: "full" | "demo";
+};
+
+export default function TradingDashboard({ mode = "full" }: TradingDashboardProps) {
   const navigate = useNavigate();
-  const { isAuthed: contextIsAuthed, user: contextUser, logout: contextLogout } = useAuth();
+  const { isAuthed: contextIsAuthed, user: contextUser, logout: contextLogout, authFetch } = useAuth();
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   
   const [orderBook, setOrderBook] = useState<Order[]>([]);
@@ -949,6 +987,18 @@ export default function TradingDashboard() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const lastErrorRef = useRef<string | null>(null);
+
+  const showError = useCallback(
+    (message: string | null) => {
+      if (message && message === lastErrorRef.current) {
+        return;
+      }
+      lastErrorRef.current = message;
+      setErr(message);
+    },
+    []
+  );
   // Load myOrderIds from localStorage on mount
   const [myOrderIds, setMyOrderIds] = useState<Set<string>>(() => {
     try {
@@ -1025,15 +1075,6 @@ export default function TradingDashboard() {
   const [bookVisibleCount, setBookVisibleCount] = useState(20);
   const [historyVisibleCount, setHistoryVisibleCount] = useState(30);
 
-  const getToken = () => localStorage.getItem("token");
-  const isAuthed = Boolean(getToken());
-
-  const authHeaders = (): Record<string, string> => {
-    const token = getToken();
-    if (!token) return {};
-    return { Authorization: `Bearer ${token}` };
-  };
-
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
 
@@ -1094,11 +1135,8 @@ export default function TradingDashboard() {
 
   const fetchAllData = async () => {
     try {
-      setErr(null);
-  
-      const token = getToken();
-      const isAuthed = Boolean(token);
-      const headers = authHeaders(); // empty if no token
+      showError(null);
+      const isAuthed = contextIsAuthed;
   
       // history url (only meaningful when authed)
       let historyUrl = `${API_BASE_URL}/api/orders/history?limit=50`;
@@ -1112,9 +1150,9 @@ export default function TradingDashboard() {
         : `${API_BASE_URL}/api/orders/book`;          // public
   
       const [bookRes, tradesRes, historyRes] = await Promise.all([
-        fetch(bookUrl, isAuthed ? { headers } : undefined),
+        isAuthed ? authFetch(bookUrl) : fetch(bookUrl),
         fetch(`${API_BASE_URL}/api/orders/trades/db?limit=200`),
-        isAuthed ? fetch(historyUrl, { headers }) : Promise.resolve(null),
+        isAuthed ? authFetch(historyUrl) : Promise.resolve(null),
       ]);
   
       if (!bookRes.ok) throw new Error("Failed to fetch order book");
@@ -1173,34 +1211,26 @@ export default function TradingDashboard() {
       setOrderHistory(historyData)
       setLastSyncAt(Date.now());
     } catch (e: any) {
-      setErr(e?.message || "Something went wrong");
+      let message = e?.message || "Something went wrong";
+      if (typeof message === "string" && message.includes("Failed to fetch")) {
+        console.error("Network error while fetching market data", e);
+        message = "Unable to reach the exchange API. Please check your connection or try again shortly.";
+      }
+      showError(message);
     }
   };
 
   // Poll all endpoints every 2s (regardless of demoMode).
-// demoMode should only control the bot order generator.
-useEffect(() => {
-  fetchAllData();
-  if (!isAuthed && !demoMode) return;
+  // Initial fetch whenever filters change (mineOnly / myOrderIds) – always run once.
+  useEffect(() => {
+    fetchAllData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mineOnly, myOrderIds.size]);
 
-  const interval = setInterval(fetchAllData, 2000);
-  return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [mineOnly, myOrderIds.size]);
-
-  // Hydrate logged-in user on page refresh (if token exists)
-useEffect(() => {
-  const token = getToken();
-  if (!token) return;
-
-  fetch(`${API_BASE_URL}/auth/me`, { headers: authHeaders() })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((data) => {
-      if (data?.user?.email) setCurrentUser({ email: data.user.email });
-    })
-    .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
+  // Smart polling: only when demoMode or authed.
+  const { isOffline } = useSmartPolling(fetchAllData, {
+    enabled: demoMode || contextIsAuthed,
+  });
 
   // Build order book: separate buy/sell, sort
   const { buy, sell } = useMemo(() => {
@@ -1219,7 +1249,7 @@ useEffect(() => {
   const submitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setErr(null);
+    showError(null);
 
     try {
       const price = Number(form.price);
@@ -1231,20 +1261,23 @@ useEffect(() => {
         return;
       }
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        ...authHeaders(),
-      };
-      
-      const endpoint = getToken()
+      const isAuthed = contextIsAuthed;
+
+      const endpoint = isAuthed
         ? `${API_BASE_URL}/api/orders`
         : `${API_BASE_URL}/api/orders/demo`;
 
-      const res = await fetch(endpoint, {
+      const commonInit: RequestInit = {
         method: "POST",
-        headers,
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ type: form.type, price, quantity }),
-      });
+      };
+
+      const res = isAuthed
+        ? await authFetch(endpoint, commonInit)
+        : await fetch(endpoint, commonInit);
 
       if (!res.ok) {
         const msg = await res.json().catch(() => null);
@@ -1259,7 +1292,7 @@ useEffect(() => {
         null;
       
       // Track user's order ID (only real backend IDs, normalized to string)
-      if (orderId && getToken()) {
+      if (orderId && isAuthed) {
         setMyOrderIds((prev) => new Set(Array.from(prev).concat(String(orderId))));
       }
 
@@ -1270,13 +1303,12 @@ useEffect(() => {
       
       // Check if order was immediately filled (auth users only)
       setTimeout(async () => {
-        if (!getToken()) return; // <-- prevents guest 401
+        if (!contextIsAuthed) return; // <-- prevents guest 401
 
         await fetchAllData();
 
-        const updatedHistory = await fetch(
-          `${API_BASE_URL}/api/orders/history?limit=50`,
-          { headers: authHeaders() }
+        const updatedHistory = await authFetch(
+          `${API_BASE_URL}/api/orders/history?limit=50`
         )
           .then((r) => r.json())
           .catch(() => []);
@@ -1293,7 +1325,12 @@ useEffect(() => {
       }, 500);
 
     } catch (e: any) {
-      setErr(e?.message || "Submit failed");
+      let message = e?.message || "Submit failed";
+      if (typeof message === "string" && message.includes("Failed to fetch")) {
+        console.error("Network error while submitting order", e);
+        message = "Unable to reach the exchange API. Please try again in a moment.";
+      }
+      showError(message);
     } finally {
       setLoading(false);
     }
@@ -1301,12 +1338,11 @@ useEffect(() => {
 
   const cancelOrder = async (id: string) => {
     setLoading(true);
-    setErr(null);
+    showError(null);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/orders/${id}`, {
+      const res = await authFetch(`${API_BASE_URL}/api/orders/${id}`, {
         method: "DELETE",
-        headers: authHeaders(),
       });
 
       if (!res.ok) {
@@ -1316,7 +1352,12 @@ useEffect(() => {
 
       await fetchAllData();
     } catch (e: any) {
-      setErr(e?.message || "Cancel failed");
+      let message = e?.message || "Cancel failed";
+      if (typeof message === "string" && message.includes("Failed to fetch")) {
+        console.error("Network error while cancelling order", e);
+        message = "Unable to reach the exchange API. Please try again in a moment.";
+      }
+      showError(message);
     } finally {
       setLoading(false);
     }
@@ -1599,7 +1640,7 @@ useEffect(() => {
                     })()}
                   </div>
 
-                  {(o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
+                  {contextIsAuthed && (o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
                     <button
                       onClick={() => cancelOrder(o.id)}
                       disabled={loading}
@@ -1687,7 +1728,7 @@ useEffect(() => {
                     })()}
                   </div>
 
-                  {(o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
+                  {contextIsAuthed && (o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
                     <button
                       onClick={() => cancelOrder(o.id)}
                       disabled={loading}
@@ -1902,7 +1943,7 @@ useEffect(() => {
           {orderHistory.length === 0 
             ? (mineOnly && myOrderIds.size === 0 
                 ? "No orders tracked" 
-                : (contextIsAuthed ? "No orders yet" : "Log in to view your order history"))
+                : (contextIsAuthed ? "No orders yet" : "Sign in to view your order history and cancel orders"))
             : `No ${historyFilter === "all" ? "" : historyFilter} orders`}
         </div>
       ) : (
@@ -1998,6 +2039,35 @@ useEffect(() => {
 
   return (
     <div style={{ minHeight: "100dvh", background: "#0b0f17", color: "#e5e7eb", width: "100%", maxWidth: "100%" }}>
+      {/* Offline Banner (global) */}
+      {isOffline && (
+        <div
+          style={{
+            position: "fixed",
+            top: 56,
+            left: 0,
+            right: 0,
+            zIndex: 1100,
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              background: "#111827",
+              border: "1px solid #4b5563",
+              color: "#e5e7eb",
+              padding: "6px 12px",
+              borderRadius: 999,
+              fontSize: 12,
+              pointerEvents: "auto",
+            }}
+          >
+            You're offline. Reconnecting…
+          </div>
+        </div>
+      )}
       {/* Logout Confirmation Modal */}
       <ConfirmModal
         isOpen={showLogoutConfirm}
@@ -2210,6 +2280,8 @@ useEffect(() => {
             OrderBookPanel={OrderBookPanel}
             TradesPanel={TradesPanel}
             HistoryPanel={HistoryPanel}
+            showOrderForm={mode === "full"}
+            onSignInClick={() => navigate("/auth?next=/app")}
           />
         ) : (
           <GuestView
@@ -2230,6 +2302,8 @@ useEffect(() => {
             OrderBookPanel={OrderBookPanel}
             TradesPanel={TradesPanel}
             HistoryPanel={HistoryPanel}
+            showOrderForm={mode === "demo" ? false : true}
+            onSignInClick={() => navigate("/auth?next=/app")}
           />
         )}
       </div>
