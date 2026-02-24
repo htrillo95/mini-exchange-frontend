@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { AuthWidget } from "./components/AuthWidget";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 // Trigger redeploy
@@ -237,26 +238,31 @@ export default function App() {
   
   // Demo Mode state (desktop + mobile)
   const [demoMode, setDemoMode] = useState(false);
+  const marketStatus = demoMode ? "LIVE" : "IDLE";
+  const marketDot = demoMode ? "#10b981" : "#6b7280";
   const [demoSpeed, setDemoSpeed] = useState<"slow" | "normal" | "fast">("normal");
   const demoIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Chart time window state
-  const [chartRangeMs, setChartRangeMs] = useState<number | "ALL">("ALL");
+  const [chartRangeMs, setChartRangeMs] = useState<number | "ALL">(300000); // 5m default
 
   // Mobile layout tab state: which panel is visible on small screens.
   // Desktop ignores this and shows all panels.
   const [mobileTab, setMobileTab] = useState<"book" | "trades" | "history">("book");
   
   // State for relative time updates (updates every 5 seconds)
-  const [, setTimeNow] = useState(Date.now());
+  const [timeNow, setTimeNow] = useState(Date.now());
   
-  // Update relative timestamps every 5 seconds
   useEffect(() => {
+    // when demoMode is ON, refresh faster so chart/time labels feel live
+    const ms = demoMode ? 1000 : 5000;
+  
     const interval = setInterval(() => {
       setTimeNow(Date.now());
-    }, 5000);
+    }, ms);
+  
     return () => clearInterval(interval);
-  }, []);
+  }, [demoMode]);
 
   // Mobile breakpoint detection: width < 768 OR height <= 520
   const [isMobile, setIsMobile] = useState(false);
@@ -285,6 +291,9 @@ export default function App() {
     if (!token) return {};
     return { Authorization: `Bearer ${token}` };
   };
+
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
 
   // ======================
   // AUTH UI STATE + HELPERS
@@ -419,20 +428,23 @@ export default function App() {
       }
   
       setTrades(tradesData);
-      setOrderHistory(historyData);
+      setOrderHistory(historyData)
+      setLastSyncAt(Date.now());
     } catch (e: any) {
       setErr(e?.message || "Something went wrong");
     }
   };
 
-  // Poll all three endpoints every 2s
-  // Re-fetch when mineOnly changes to switch between endpoints
-  useEffect(() => {
-    fetchAllData();
-    const interval = setInterval(fetchAllData, 2000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mineOnly, myOrderIds.size]);
+  // Poll all endpoints every 2s (regardless of demoMode).
+// demoMode should only control the bot order generator.
+useEffect(() => {
+  fetchAllData();
+  if (!isAuthed && !demoMode) return;
+
+  const interval = setInterval(fetchAllData, 2000);
+  return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [mineOnly, myOrderIds.size]);
 
   // Hydrate logged-in user on page refresh (if token exists)
 useEffect(() => {
@@ -657,7 +669,7 @@ useEffect(() => {
       trades: [...filtered].reverse(),
       usedFallback,
     };
-  }, [sortedTrades, chartRangeMs]);
+  }, [sortedTrades, chartRangeMs, timeNow]);
 
   // Demo Mode: submit random order
   const submitDemoOrderRef = useRef<(() => Promise<void>) | null>(null);
@@ -1318,40 +1330,43 @@ useEffect(() => {
         </span>
           </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div
-            style={{
-                background: isActive ? "#10b981" : "#6b7280",
-              borderRadius: "50%",
-                width: 8,
-                height: 8,
-              animation: isActive ? "pulse 1.2s infinite" : "none",
-            }}
-          />
-          <span
-            style={{
-                fontSize: 12,
-              fontWeight: 700,
-                color: isActive ? "#10b981" : "#9ca3af",
-              letterSpacing: 0.5,
-            }}
-          >
-            {isActive ? "LIVE" : "IDLE"}
-          </span>
-      </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+  <div
+    style={{
+      background: marketDot,
+      borderRadius: "50%",
+      width: 8,
+      height: 8,
+      animation: demoMode ? "pulse 1.2s infinite" : "none",
+    }}
+  />
+  <span
+    style={{
+      fontSize: 12,
+      fontWeight: 700,
+      color: demoMode ? "#10b981" : "#9ca3af",
+      letterSpacing: 0.5,
+      fontFamily: "monospace",
+    }}
+  >
+    {marketStatus}
+  </span>
+
+  {/* optional small sync stamp (does NOT replace status) */}
+  {lastSyncAt && (
+    <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace" }}>
+      • {new Date(lastSyncAt).toLocaleTimeString()}
+    </span>
+  )}
+</div>
 
           <button
             type="button"
-            onClick={fetchAllData}
-            disabled={loading}
+            onClick={() => setAuthOpen(true)}
             className="btn-secondary"
-            style={{
-              padding: "6px 12px",
-              fontSize: 13,
-              cursor: loading ? "not-allowed" : "pointer",
-            }}
+            style={{ padding: "6px 12px", fontSize: 13 }}
           >
-            Refresh
+            {isAuthed ? (currentUser?.email ? currentUser.email.split("@")[0] : "Account") : "Sign in"}
           </button>
 
           {/* Demo Mode Controls */}
@@ -1364,7 +1379,7 @@ useEffect(() => {
                 style={{ cursor: "pointer" }}
               />
               <span style={{ color: demoMode ? "#fbbf24" : "#9ca3af", fontWeight: demoMode ? 600 : 400 }}>
-                Simulated Market (Bots)
+                Simulate Market (Bots/Demo Mode)
               </span>
             </label>
             {demoMode && (
@@ -1452,87 +1467,65 @@ useEffect(() => {
         </div>
 
         {/* Mini Line Chart */}
-        {chartTrades.trades.length > 0 && (
-          <div
-            className="chart-container"
-            style={{
-              background: "#111827",
-              border: "1px solid #1f2937",
-              borderRadius: 6,
-              padding: 12,
-              marginBottom: 10,
-              position: "relative",
-              width: "100%",
-            }}
-          >
-            {/* Header with dropdown */}
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 8,
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>
-                Price Trend
-              </h3>
-              <select
-                value={chartRangeMs === "ALL" ? "ALL" : chartRangeMs}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setChartRangeMs(val === "ALL" ? "ALL" : Number(val));
-                }}
-                className="input-terminal"
-                style={{
-                  padding: "4px 8px",
-                  fontSize: 12,
-                  minWidth: 100,
-                }}
-              >
-                <option value={1000}>1s</option>
-                <option value={15000}>15s</option>
-                <option value={30000}>30s</option>
-                <option value={60000}>1m</option>
-                <option value={300000}>5m</option>
-                <option value="ALL">All</option>
-              </select>
-                </div>
+        <div
+  className="chart-container"
+  style={{
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 10,
+    position: "relative",
+    width: "100%",
+  }}
+>
+  {/* Header with dropdown */}
+  <div
+    style={{
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 8,
+    }}
+  >
+    <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>
+      Price Trend
+    </h3>
+    <select
+      value={chartRangeMs === "ALL" ? "ALL" : chartRangeMs}
+      onChange={(e) => {
+        const val = e.target.value;
+        setChartRangeMs(val === "ALL" ? "ALL" : Number(val));
+      }}
+      className="input-terminal"
+      style={{
+        padding: "4px 8px",
+        fontSize: 12,
+        minWidth: 100,
+      }}
+    >
+      <option value={1000}>1s</option>
+      <option value={15000}>15s</option>
+      <option value={30000}>30s</option>
+      <option value={60000}>1m</option>
+      <option value={300000}>5m</option>
+      <option value="ALL">All</option>
+    </select>
+  </div>
 
-            {/* Caption */}
-            <div
-              style={{
-                position: "absolute",
-                top: 48,
-                left: 16,
-                fontSize: 11,
-                color: "#6b7280",
-                zIndex: 1,
-                background: "#111827",
-                padding: "2px 4px",
-                borderRadius: 3,
-              }}
-            >
-              Last {chartTrades.trades.length} trades • Window:{" "}
-              {chartRangeMs === "ALL"
-                ? "All"
-                : chartRangeMs === 1000
-                ? "1s"
-                : chartRangeMs === 15000
-                ? "15s"
-                : chartRangeMs === 30000
-                ? "30s"
-                : chartRangeMs === 60000
-                ? "1m"
-                : chartRangeMs === 300000
-                ? "5m"
-                : "Unknown"}
-              {chartTrades.usedFallback && " (fallback)"}
-                </div>
-
-            <MiniChart trades={chartTrades.trades} usedFallback={chartTrades.usedFallback} isMobile={isMobile} />
-              </div>
-        )}
+  {/* Body */}
+  {chartTrades.trades.length === 0 ? (
+    <div style={{ fontSize: 12, color: "#6b7280", padding: "12px 0" }}>
+      No trades yet — the chart will appear after the first match.
+    </div>
+  ) : (
+    <MiniChart
+      trades={chartTrades.trades}
+      usedFallback={chartTrades.usedFallback}
+      isMobile={isMobile}
+    />
+  )}
+</div>
 
         {/* Error Banner */}
         {err && (
