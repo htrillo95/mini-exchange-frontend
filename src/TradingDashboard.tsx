@@ -4,6 +4,7 @@ import { AuthWidget } from "./components/AuthWidget";
 import { useAuth } from "./auth/AuthContext";
 import ConfirmModal from "./components/ConfirmModal";
 import useSmartPolling from "./hooks/useSmartPolling";
+import useMarketWebSocket from "./hooks/useMarketWebSocket";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 // Trigger redeploy
@@ -1030,10 +1031,11 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   
   // Demo Mode state (desktop + mobile)
   const [demoMode, setDemoMode] = useState(false);
+  const [demoStarting, setDemoStarting] = useState(false);
+  const [demoStopping, setDemoStopping] = useState(false);
   const marketStatus = demoMode ? "LIVE" : "IDLE";
   const marketDot = demoMode ? "#10b981" : "#6b7280";
   const [demoSpeed, setDemoSpeed] = useState<"slow" | "normal" | "fast">("normal");
-  const demoIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Chart time window state
   const [chartRangeMs, setChartRangeMs] = useState<number | "ALL">(300000); // 5m default
@@ -1227,9 +1229,31 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mineOnly, myOrderIds.size]);
 
-  // Smart polling: only when demoMode or authed.
-  const { isOffline } = useSmartPolling(fetchAllData, {
+  // WebSocket callbacks for real-time updates
+  const handleBookUpdate = useCallback((book: unknown) => {
+    // Normalize and filter like fetchAllData does
+    // Handle both array format and { buy: [], sell: [] } format
+    const normalizedBook: Order[] = Array.isArray(book)
+      ? (book as Order[])
+      : [...((book as { buy?: Order[]; sell?: Order[] }).buy || []), ...((book as { buy?: Order[]; sell?: Order[] }).sell || [])];
+    const filteredBook = normalizedBook.filter((o: Order) => o.quantity > 0);
+    setOrderBook(filteredBook);
+  }, []);
+
+  const handleTradesUpdate = useCallback((trades: unknown[]) => {
+    setTrades(trades as Trade[]);
+  }, []);
+
+  // WebSocket: enabled when demoMode or authed
+  const { wsConnected } = useMarketWebSocket({
     enabled: demoMode || contextIsAuthed,
+    onBook: handleBookUpdate,
+    onTrades: handleTradesUpdate,
+  });
+
+  // Smart polling: only when demoMode or authed, and WS is not connected (fallback)
+  const { isOffline } = useSmartPolling(fetchAllData, {
+    enabled: (demoMode || contextIsAuthed) && !wsConnected,
   });
 
   // Build order book: separate buy/sell, sort
@@ -1454,67 +1478,73 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     };
   }, [sortedTrades, chartRangeMs, timeNow]);
 
-  // Demo Mode: submit random order
-  const submitDemoOrderRef = useRef<(() => Promise<void>) | null>(null);
-  
-  submitDemoOrderRef.current = async () => {
+  // Sync demo status on mount and when status changes
+  useEffect(() => {
+    const syncDemoStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/demo/status`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.running !== undefined) {
+            setDemoMode(data.running);
+          }
+        }
+      } catch (e) {
+        console.debug("Failed to sync demo status:", e);
+      }
+    };
+    
+    syncDemoStatus();
+    
+    // Listen for status change events (from GuestDemo auto-start)
+    const handleStatusChange = () => {
+      syncDemoStatus();
+    };
+    window.addEventListener("demo-status-changed", handleStatusChange);
+    
+    return () => {
+      window.removeEventListener("demo-status-changed", handleStatusChange);
+    };
+  }, []);
+
+  // Handle demo mode toggle via backend API
+  const handleDemoModeToggle = async (checked: boolean) => {
+    const previousValue = demoMode;
+    
+    // Optimistically update UI
+    setDemoMode(checked);
+    
     try {
-      // Compute midpoint from current trades: rolling avg of last 20, or default 10.0
-      let midpoint = 10.0;
-      if (sortedTrades.length > 0) {
-        const recentTrades = sortedTrades.slice(0, 20);
-        midpoint = recentTrades.reduce((sum, t) => sum + t.price, 0) / recentTrades.length;
+      if (checked) {
+        setDemoStarting(true);
+        const res = contextIsAuthed
+          ? await authFetch(`${API_BASE_URL}/api/demo/start`, { method: "POST" })
+          : await fetch(`${API_BASE_URL}/api/demo/start`, { method: "POST" });
+        
+        if (!res.ok) {
+          const msg = await res.json().catch(() => null);
+          throw new Error(msg?.error || "Failed to start demo mode");
+        }
+      } else {
+        setDemoStopping(true);
+        const res = contextIsAuthed
+          ? await authFetch(`${API_BASE_URL}/api/demo/stop`, { method: "POST" })
+          : await fetch(`${API_BASE_URL}/api/demo/stop`, { method: "POST" });
+        
+        if (!res.ok) {
+          const msg = await res.json().catch(() => null);
+          throw new Error(msg?.error || "Failed to stop demo mode");
+        }
       }
-
-      // Generate random order
-      const type = Math.random() < 0.5 ? "buy" : "sell";
-      const jitter = (Math.random() - 0.5) * 1.0; // ±0.5
-      const price = Math.max(0.01, Math.round((midpoint + jitter) * 100) / 100);
-      const quantity = Math.floor(Math.random() * 5) + 1; // 1-5
-
-      const res = await fetch(`${API_BASE_URL}/api/orders/demo`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, price, quantity }),
-      });
-
-      if (!res.ok) {
-        console.debug("Demo order failed:", await res.text().catch(() => "Unknown error"));
-      }
-    } catch (e) {
-      console.debug("Demo order error:", e);
+    } catch (e: any) {
+      // Revert checkbox on error
+      setDemoMode(previousValue);
+      showError(e?.message || "Failed to toggle demo mode. Please try again.");
+    } finally {
+      setDemoStarting(false);
+      setDemoStopping(false);
     }
   };
-
-  // Demo Mode: manage interval
-  useEffect(() => {
-    if (demoMode) {
-      const speeds = { slow: 2500, normal: 1200, fast: 600 };
-      const intervalMs = speeds[demoSpeed];
-
-      // Clear any existing interval
-      if (demoIntervalRef.current) {
-        clearInterval(demoIntervalRef.current);
-      }
-
-      demoIntervalRef.current = setInterval(() => {
-        submitDemoOrderRef.current?.();
-      }, intervalMs);
-
-      return () => {
-        if (demoIntervalRef.current) {
-          clearInterval(demoIntervalRef.current);
-          demoIntervalRef.current = null;
-        }
-      };
-    } else {
-      if (demoIntervalRef.current) {
-        clearInterval(demoIntervalRef.current);
-        demoIntervalRef.current = null;
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demoMode, demoSpeed]);
 
   // Panel components (reusable for desktop grid and mobile single-panel)
   // These functions return JSX that can be placed in either layout context
@@ -2205,6 +2235,25 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       • {new Date(lastSyncAt).toLocaleTimeString()}
     </span>
   )}
+
+  {/* WebSocket status chip */}
+  {(demoMode || contextIsAuthed) && (
+    <span
+      style={{
+        fontSize: 10,
+        padding: "2px 6px",
+        background: wsConnected ? "#065f46" : "#374151",
+        color: wsConnected ? "#6ee7b7" : "#9ca3af",
+        border: `1px solid ${wsConnected ? "#10b981" : "#4b5563"}`,
+        borderRadius: 4,
+        fontWeight: 600,
+        letterSpacing: 0.3,
+        fontFamily: "monospace",
+      }}
+    >
+      WS {wsConnected ? "ON" : "OFF"}
+    </span>
+  )}
 </div>
 
           {contextIsAuthed ? (
@@ -2229,15 +2278,18 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
 
           {/* Demo Mode Controls */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 12, borderLeft: "1px solid #1f2937" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: demoStarting || demoStopping ? "not-allowed" : "pointer" }}>
               <input
                 type="checkbox"
                 checked={demoMode}
-                onChange={(e) => setDemoMode(e.target.checked)}
-                style={{ cursor: "pointer" }}
+                onChange={(e) => handleDemoModeToggle(e.target.checked)}
+                disabled={demoStarting || demoStopping}
+                style={{ cursor: demoStarting || demoStopping ? "not-allowed" : "pointer", opacity: demoStarting || demoStopping ? 0.5 : 1 }}
               />
               <span style={{ color: demoMode ? "#fbbf24" : "#9ca3af", fontWeight: demoMode ? 600 : 400 }}>
                 Simulate Market (Bots/Demo Mode)
+                {demoStarting && " (Starting…)"}
+                {demoStopping && " (Stopping…)"}
               </span>
             </label>
             {demoMode && (
@@ -2245,16 +2297,23 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
                 value={demoSpeed}
                 onChange={(e) => setDemoSpeed(e.target.value as "slow" | "normal" | "fast")}
                 className="input-terminal"
+                disabled={demoStarting || demoStopping}
                 style={{
                   padding: "4px 8px",
                   fontSize: 12,
                   minWidth: 90,
+                  opacity: demoStarting || demoStopping ? 0.5 : 1,
                 }}
               >
                 <option value="slow">Slow</option>
                 <option value="normal">Normal</option>
                 <option value="fast">Fast</option>
               </select>
+            )}
+            {mode === "demo" && (
+              <span style={{ fontSize: 11, color: "#6b7280", fontStyle: "italic" }}>
+                Demo market managed automatically on this page
+              </span>
             )}
           </div>
         </div>
