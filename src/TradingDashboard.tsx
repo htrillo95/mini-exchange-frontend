@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { AuthWidget } from "./components/AuthWidget";
 import { useAuth } from "./auth/AuthContext";
 import ConfirmModal from "./components/ConfirmModal";
 import useSmartPolling from "./hooks/useSmartPolling";
@@ -1044,8 +1043,8 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   // Desktop ignores this and shows all panels.
   const [mobileTab, setMobileTab] = useState<"book" | "trades" | "history">("book");
   
-  // State for relative time updates (updates every 5 seconds)
-  const [timeNow, setTimeNow] = useState(Date.now());
+  // State for relative time updates (updates every 5 seconds; value triggers re-renders)
+  const [, setTimeNow] = useState(Date.now());
   
   useEffect(() => {
     // when demoMode is ON, refresh faster so chart/time labels feel live
@@ -1078,62 +1077,52 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   const [historyVisibleCount, setHistoryVisibleCount] = useState(30);
 
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
-  const [authOpen, setAuthOpen] = useState(false);
-
-  // ======================
-  // AUTH UI STATE + HELPERS
-  // ======================
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [currentUser, setCurrentUser] = useState<{ email: string } | null>(null);
-  
-  const logout = () => {
-    localStorage.removeItem("token");
-    setCurrentUser(null);
-    setMineOnly(false); // avoids protected history calls
-    setSuccessMessage("Logged out");
-    setTimeout(() => setSuccessMessage(null), 2000);
-  };
-  
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setErr(null);
-  
-    try {
-      const endpoint =
-        authMode === "login"
-          ? `${API_BASE_URL}/auth/login`
-          : `${API_BASE_URL}/auth/register`;
-  
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: authEmail, password: authPassword }),
-      });
-  
-      if (!res.ok) {
-        const msg = await res.json().catch(() => null);
-        throw new Error(msg?.error || "Auth failed");
-      }
-  
-      const data = await res.json();
-      if (data?.token) localStorage.setItem("token", data.token);
-  
-      const email = data?.user?.email || authEmail;
-      setCurrentUser({ email });
-      setAuthPassword("");
-      setSuccessMessage(`${authMode === "login" ? "Logged in" : "Registered"} as ${email}`);
-      setTimeout(() => setSuccessMessage(null), 3000);
-  
-      await fetchAllData();
-    } catch (e: any) {
-      setErr(e?.message || "Auth failed");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Auth modal state (reserved for future AuthWidget integration)
+  // const [authOpen, setAuthOpen] = useState(false);
+  // const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  // const [authEmail, setAuthEmail] = useState("");
+  // const [authPassword, setAuthPassword] = useState("");
+  // const [currentUser, setCurrentUser] = useState<{ email: string } | null>(null);
+  // const logout = () => {
+  //   localStorage.removeItem("token");
+  //   setCurrentUser(null);
+  //   setMineOnly(false);
+  //   setSuccessMessage("Logged out");
+  //   setTimeout(() => setSuccessMessage(null), 2000);
+  // };
+  // handleAuth reserved for future AuthWidget integration
+  // const handleAuth = async (e: React.FormEvent) => {
+  //   e.preventDefault();
+  //   setLoading(true);
+  //   setErr(null);
+  //   try {
+  //     const endpoint =
+  //       authMode === "login"
+  //         ? `${API_BASE_URL}/auth/login`
+  //         : `${API_BASE_URL}/auth/register`;
+  //     const res = await fetch(endpoint, {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify({ email: authEmail, password: authPassword }),
+  //     });
+  //     if (!res.ok) {
+  //       const msg = await res.json().catch(() => null);
+  //       throw new Error(msg?.error || "Auth failed");
+  //     }
+  //     const data = await res.json();
+  //     if (data?.token) localStorage.setItem("token", data.token);
+  //     const email = data?.user?.email || authEmail;
+  //     setCurrentUser({ email });
+  //     setAuthPassword("");
+  //     setSuccessMessage(`${authMode === "login" ? "Logged in" : "Registered"} as ${email}`);
+  //     setTimeout(() => setSuccessMessage(null), 3000);
+  //     await fetchAllData();
+  //   } catch (e: any) {
+  //     setErr(e?.message || "Auth failed");
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // };
 
   const fetchAllData = async () => {
     try {
@@ -1267,7 +1256,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     return { buy: buyOrders, sell: sellOrders };
   }, [orderBook]);
 
-  const isActive = buy.length + sell.length > 0;
+  // const isActive = buy.length + sell.length > 0;
   const totalTrades = trades.length;
 
   const submitOrder = async (e: React.FormEvent) => {
@@ -1476,7 +1465,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       trades: [...filtered].reverse(),
       usedFallback,
     };
-  }, [sortedTrades, chartRangeMs, timeNow]);
+  }, [sortedTrades, chartRangeMs]);
 
   // Sync demo status on mount and when status changes
   useEffect(() => {
