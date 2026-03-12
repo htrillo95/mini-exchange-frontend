@@ -194,6 +194,9 @@ interface ViewProps {
   HistoryPanel: () => React.ReactElement;
   showOrderForm: boolean;
   onSignInClick: () => void;
+  balance?: number | null;
+  positions?: { symbol: string; quantity: number; avgPrice: number }[];
+  currentPrice?: number | null;
 }
 
 function GuestView(props: ViewProps) {
@@ -603,6 +606,9 @@ function AuthedView(props: ViewProps) {
     OrderBookPanel,
     TradesPanel,
     HistoryPanel,
+    balance,
+    positions = [],
+    currentPrice,
   } = props;
 
   return (
@@ -784,6 +790,87 @@ function AuthedView(props: ViewProps) {
         </div>
       )}
 
+      {/* Account balance (logged-in only) */}
+      <div
+        style={{
+          background: "#111827",
+          border: "1px solid #1f2937",
+          borderRadius: 6,
+          padding: "10px 12px",
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>Account</div>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "#e5e7eb", fontFamily: "monospace" }}>
+          Balance: {balance != null ? `$${balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+        </div>
+      </div>
+
+      {/* Positions (logged-in only) */}
+      <div
+        style={{
+          background: "#111827",
+          border: "1px solid #1f2937",
+          borderRadius: 6,
+          padding: "10px 12px",
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Positions</div>
+        {positions.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#9ca3af" }}>No open positions</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "monospace" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #1f2937", color: "#6b7280", fontSize: 11 }}>
+                  <th style={{ textAlign: "left", padding: "4px 8px 4px 0" }}>Symbol</th>
+                  <th style={{ textAlign: "right", padding: "4px 8px" }}>Qty</th>
+                  <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>Avg Price</th>
+                  <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>Price</th>
+                  <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>PNL</th>
+                </tr>
+              </thead>
+              <tbody style={{ color: "#e5e7eb" }}>
+                {positions.map((p, i) => {
+                  const hasPrice = currentPrice != null;
+                  const pnl = hasPrice ? (currentPrice! - p.avgPrice) * p.quantity : 0;
+                  const pnlColor = pnl >= 0 ? "#22c55e" : "#ef4444";
+                  return (
+                    <tr
+                      key={`${p.symbol}-${i}`}
+                      style={{ borderBottom: i < positions.length - 1 ? "1px solid #1f2937" : undefined }}
+                    >
+                      <td style={{ padding: "6px 8px 6px 0", fontWeight: 600 }}>{p.symbol}</td>
+                      <td style={{ textAlign: "right", padding: "6px 8px" }}>{p.quantity}</td>
+                      <td style={{ textAlign: "right", padding: "6px 0 6px 8px" }}>
+                        ${p.avgPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td style={{ textAlign: "right", padding: "6px 0 6px 8px" }}>
+                        {hasPrice
+                          ? `$${currentPrice!.toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}`
+                          : "—"}
+                      </td>
+                      <td style={{ textAlign: "right", padding: "6px 0 6px 8px", color: hasPrice ? pnlColor : "#9ca3af" }}>
+                        {hasPrice
+                          ? `${pnl >= 0 ? "" : "-"}$${Math.abs(pnl).toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}`
+                          : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Order Form - Compact Ticket */}
       <div
         style={{
@@ -957,6 +1044,8 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [balance, setBalance] = useState<number | null>(null);
+  const [positions, setPositions] = useState<{ symbol: string; quantity: number; avgPrice: number }[]>([]);
   const lastErrorRef = useRef<string | null>(null);
 
   const showError = useCallback(
@@ -1008,6 +1097,8 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   
   // Chart time window state
   const [chartRangeMs, setChartRangeMs] = useState<number | "ALL">(300000); // 5m default
+  const currentPrice: number | null =
+    trades.length > 0 ? trades[trades.length - 1].price : null;
 
   // Mobile layout tab state: which panel is visible on small screens.
   // Desktop ignores this and shows all panels.
@@ -1026,6 +1117,30 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   
     return () => clearInterval(interval);
   }, [demoMode]);
+
+  // Fetch account balance when logged in
+  useEffect(() => {
+    if (!contextIsAuthed) {
+      setBalance(null);
+      return;
+    }
+    authFetch(`${API_BASE_URL}/api/account`)
+      .then((res) => res.json())
+      .then((data: { balance: number }) => setBalance(data.balance))
+      .catch(console.error);
+  }, [contextIsAuthed]);
+
+  // Fetch positions when logged in
+  useEffect(() => {
+    if (!contextIsAuthed) {
+      setPositions([]);
+      return;
+    }
+    authFetch(`${API_BASE_URL}/api/positions`)
+      .then((res) => res.json())
+      .then((data: { symbol: string; quantity: number; avgPrice: number }[]) => setPositions(Array.isArray(data) ? data : []))
+      .catch(console.error);
+  }, [contextIsAuthed]);
 
   // Mobile breakpoint detection: width < 768 OR height <= 520
   const [isMobile, setIsMobile] = useState(false);
@@ -1824,6 +1939,21 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     </div>
   );
 
+  const handleCancelOrder = async (orderId: string) => {
+    try {
+      showError(null);
+      const res = await authFetch(`${API_BASE_URL}/api/orders/${orderId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const msg = await res.json().catch(() => null);
+        throw new Error(msg?.error || "Failed to cancel order");
+      }
+      await fetchAllData();
+      setSuccessMessage("Order canceled");
+    } catch (e: any) {
+      showError(e?.message || "Failed to cancel order");
+    }
+  };
+
   const HistoryPanel = () => (
     <div
       className="history-card"
@@ -1940,9 +2070,9 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
           {/* Desktop header row only (we'll hide on mobile in CSS) */}
           <div
             className="history-header"
-        style={{
+            style={{
               display: "grid",
-              gridTemplateColumns: "100px 60px 70px 55px 55px 60px 100px 1fr",
+              gridTemplateColumns: "100px 60px 70px 55px 55px 60px 100px 1fr 70px",
               gap: 10,
               padding: "8px 10px",
               background: "#0f172a",
@@ -1955,7 +2085,15 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
               letterSpacing: 0.5,
             }}
           >
-            <div>ID</div><div>Type</div><div>Price</div><div>Qty</div><div>Filled</div><div>Remain</div><div>Status</div><div>Created</div>
+            <div>ID</div>
+            <div>Type</div>
+            <div>Price</div>
+            <div>Qty</div>
+            <div>Filled</div>
+            <div>Remain</div>
+            <div>Status</div>
+            <div>Created</div>
+            <div>Action</div>
           </div>
 
           <div className="panel-scroll" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, maxHeight: isMobile ? "300px" : "400px", overflowY: "auto" }}>
@@ -1965,7 +2103,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
                 className="history-row"
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "100px 60px 70px 55px 55px 60px 100px 1fr",
+                  gridTemplateColumns: "100px 60px 70px 55px 55px 60px 100px 1fr 70px",
                   gap: 10,
                   padding: "8px 10px",
                   background: myOrderIds.has(String(o.id)) ? "#1e3a8a" : "#0f172a",
@@ -2011,6 +2149,26 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
                 })()}
                 <div><StatusChip status={o.status} /></div>
                 <div style={{ fontSize: 11, color: "#6b7280" }}>{formatRelativeTime(o.createdAt)}</div>
+                <div>
+                  {contextIsAuthed && (o.status === "OPEN" || o.status === "PARTIAL") && (
+                    <button
+                      type="button"
+                      onClick={() => handleCancelOrder(o.id)}
+                      style={{
+                        padding: "3px 8px",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        borderRadius: 4,
+                        border: "1px solid #b91c1c",
+                        background: "#111827",
+                        color: "#fca5a5",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -2300,6 +2458,9 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
             HistoryPanel={HistoryPanel}
             showOrderForm={mode === "full"}
             onSignInClick={() => navigate("/auth?next=/app")}
+            balance={balance}
+            positions={positions}
+            currentPrice={currentPrice}
           />
         ) : (
           <GuestView
