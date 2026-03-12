@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { createChart, ColorType, UTCTimestamp } from "lightweight-charts";
 import { useAuth } from "./auth/AuthContext";
 import ConfirmModal from "./components/ConfirmModal";
 import useSmartPolling from "./hooks/useSmartPolling";
@@ -47,20 +48,6 @@ function formatRelativeTime(iso?: string): string {
   return d.toLocaleTimeString();
 }
 
-function formatTimeMMSS(iso?: string): string {
-  if (!iso) return "--:--";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "--:--";
-  const minutes = d.getMinutes().toString().padStart(2, "0");
-  const seconds = d.getSeconds().toString().padStart(2, "0");
-  return `${minutes}:${seconds}`;
-}
-
-function getMidIndex(points: any[]): number {
-  if (points.length === 0) return 0;
-  return Math.floor((points.length - 1) / 2);
-}
-
 function StatusChip({ status }: { status: OrderStatus }) {
   const styles: Record<OrderStatus, React.CSSProperties> = {
     OPEN: { background: "#1e3a8a", color: "#93c5fd", border: "1px solid #3b82f6" },
@@ -85,122 +72,105 @@ function StatusChip({ status }: { status: OrderStatus }) {
   );
 }
 
+/** Convert trades to lightweight-charts format: { time: Unix seconds, value: price }, oldest first */
+function tradesToChartData(trades: Trade[]): { time: UTCTimestamp; value: number }[] {
+  return trades
+    .filter((t) => t.createdAt != null)
+    .map((t) => {
+      const ms = new Date(t.createdAt!).getTime();
+      const time = Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
+      return { time: time as UTCTimestamp, value: t.price };
+    })
+    .sort((a, b) => a.time - b.time);
+}
+
+/** Ensure timestamps are strictly increasing for lightweight-charts (no duplicates allowed). */
+function ensureStrictlyIncreasingTimes(
+  data: { time: UTCTimestamp; value: number }[]
+): { time: UTCTimestamp; value: number }[] {
+  const sorted = [...data].sort((a, b) => a.time - b.time);
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].time <= sorted[i - 1].time) {
+      sorted[i] = { ...sorted[i], time: (sorted[i - 1].time + 1) as UTCTimestamp };
+    }
+  }
+  return sorted;
+}
+
 function MiniChart({ trades, usedFallback, isMobile }: { trades: Trade[]; usedFallback: boolean; isMobile: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
+  const seriesRef = useRef<ReturnType<ReturnType<typeof createChart>["addLineSeries"]> | null>(null);
+
+  const chartData = useMemo(() => tradesToChartData(trades), [trades]);
+
+  // Create chart on mount; resize and cleanup on unmount
+  useEffect(() => {
+    if (!containerRef.current || trades.length === 0) return;
+
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#0b1220" },
+        textColor: "#94a3b8",
+      },
+      grid: {
+        vertLines: { color: "#1e293b" },
+        horzLines: { color: "#1e293b" },
+      },
+      rightPriceScale: {
+        borderColor: "#334155",
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
+      timeScale: {
+        borderColor: "#334155",
+        timeVisible: true,
+        secondsVisible: true,
+      },
+      crosshair: {
+        mode: 1,
+        vertLine: { color: "#64748b" },
+        horzLine: { color: "#64748b" },
+      },
+      handleScroll: { vertTouchDrag: false },
+      width: containerRef.current.clientWidth,
+      height: isMobile ? 150 : 220,
+    });
+
+    const lineSeries = chart.addLineSeries({
+      color: "#22c55e",
+      lineWidth: 2,
+      priceScaleId: "right",
+    });
+
+    chartRef.current = chart;
+    seriesRef.current = lineSeries;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (!entries.length || !chartRef.current || !containerRef.current) return;
+      const { width, height } = containerRef.current.getBoundingClientRect();
+      chartRef.current.applyOptions({ width, height });
+    });
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, [isMobile]);
+
+  // Update series when trade data changes
+  useEffect(() => {
+    if (!seriesRef.current || chartData.length === 0) return;
+    const sorted = ensureStrictlyIncreasingTimes(chartData);
+    seriesRef.current.setData(sorted);
+    chartRef.current?.timeScale().fitContent();
+  }, [chartData]);
+
   if (trades.length === 0) return null;
 
-  const prices = trades.map((t) => t.price);
-  const width = 800;
-  const height = isMobile ? 150 : 220;
-  const padding = { top: 15, right: 20, bottom: 40, left: 60 };
-  
-  // Y-axis ticks: Desktop ~5 ticks, Mobile ~3 ticks
-  const yAxisTicks = isMobile ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
-  const yAxisFontSize = isMobile ? 10 : 12;
-
-  const minPrice = Math.min(...prices);
-  const maxPrice = Math.max(...prices);
-  const priceRange = maxPrice - minPrice || 1;
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-
-  // Generate path
-  const points = prices.map((price, i) => {
-    const x = padding.left + (i / (prices.length - 1 || 1)) * chartWidth;
-    const y = padding.top + chartHeight - ((price - minPrice) / priceRange) * chartHeight;
-    return { x, y, price, trade: trades[i] };
-  });
-
-  const pathData = points
-    .map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`))
-    .join(" ");
-
-  // Time labels: left, middle, right
-  const leftTime = points.length > 0 ? formatTimeMMSS(points[0].trade.createdAt) : "--:--";
-  const midIndex = getMidIndex(points);
-  const midTime = points.length > 0 ? formatTimeMMSS(points[midIndex].trade.createdAt) : "--:--";
-  const rightTime = points.length > 0 ? formatTimeMMSS(points[points.length - 1].trade.createdAt) : "--:--";
-
-  return (
-    <div>
-      <div style={{ width: "100%", overflowX: isMobile ? "auto" : "visible" }}>
-        <svg
-          width="100%"
-          height={height}
-          style={{ display: "block" }}
-          viewBox={`0 0 ${width} ${height}`}
-          preserveAspectRatio="none"
-          className="chart-svg"
-        >
-          {/* Grid lines - adaptive based on isMobile */}
-          {yAxisTicks.map((ratio) => {
-            const y = padding.top + chartHeight * (1 - ratio);
-            const price = minPrice + priceRange * ratio;
-            return (
-              <g key={ratio}>
-                <line
-                  x1={padding.left}
-                  y1={y}
-                  x2={width - padding.right}
-                  y2={y}
-                  stroke="#1f2937"
-                  strokeWidth={1}
-                />
-                <text
-                  x={padding.left - 12}
-                  y={y + 5}
-                  fill="#6b7280"
-                  fontSize={yAxisFontSize}
-                  textAnchor="end"
-                  fontFamily="monospace"
-                  fontWeight={500}
-                >
-                  ${price.toFixed(2)}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Price line */}
-          <path
-            d={pathData}
-            fill="none"
-            stroke="#10b981"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {/* Data points */}
-          {points.map((p, i) => (
-            <circle
-              key={i}
-              cx={p.x}
-              cy={p.y}
-              r={2}
-              fill="#10b981"
-              opacity={0.8}
-            />
-          ))}
-        </svg>
-      </div>
-      
-      {/* Time labels - aligned with chart plot area (left: 60px, right: 20px) */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          padding: "8px 20px 0 60px",
-          fontSize: 11,
-          color: "#6b7280",
-          fontFamily: "monospace",
-        }}
-      >
-        <span>{leftTime}</span>
-        <span>{midTime}</span>
-        <span>{rightTime}</span>
-      </div>
-    </div>
-  );
+  return <div ref={containerRef} style={{ width: "100%", minHeight: isMobile ? 150 : 220 }} />;
 }
 
 // Props interface for view components
