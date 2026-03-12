@@ -150,6 +150,28 @@ export default function AuthPage() {
         />
       )}
 
+      <button
+        type="button"
+        onClick={() => navigate("/")}
+        style={{
+          background: "none",
+          border: "none",
+          color: "#9ca3af",
+          fontSize: 14,
+          cursor: "pointer",
+          padding: "4px 0",
+          marginBottom: 16,
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "#e5e7eb";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "#9ca3af";
+        }}
+      >
+        ← Back
+      </button>
+
       <div
         style={{
           maxWidth: 400,
