@@ -72,105 +72,121 @@ function StatusChip({ status }: { status: OrderStatus }) {
   );
 }
 
-/** Convert trades to lightweight-charts format: { time: Unix seconds, value: price }, oldest first */
-function tradesToChartData(trades: Trade[]): { time: UTCTimestamp; value: number }[] {
-  return trades
-    .filter((t) => t.createdAt != null)
-    .map((t) => {
-      const ms = new Date(t.createdAt!).getTime();
-      const time = Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
-      return { time: time as UTCTimestamp, value: t.price };
-    })
-    .sort((a, b) => a.time - b.time);
-}
-
-/** Ensure timestamps are strictly increasing for lightweight-charts (no duplicates allowed). */
-function ensureStrictlyIncreasingTimes(
-  data: { time: UTCTimestamp; value: number }[]
-): { time: UTCTimestamp; value: number }[] {
-  const sorted = [...data].sort((a, b) => a.time - b.time);
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].time <= sorted[i - 1].time) {
-      sorted[i] = { ...sorted[i], time: (sorted[i - 1].time + 1) as UTCTimestamp };
-    }
-  }
-  return sorted;
-}
-
-function MiniChart({ trades, usedFallback, isMobile }: { trades: Trade[]; usedFallback: boolean; isMobile: boolean }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+/** Candlestick chart: fetches OHLC from /api/market/candles and renders with lightweight-charts */
+function CandlestickChart() {
+  const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
-  const seriesRef = useRef<ReturnType<ReturnType<typeof createChart>["addLineSeries"]> | null>(null);
 
-  const chartData = useMemo(() => tradesToChartData(trades), [trades]);
-
-  // Create chart on mount; resize and cleanup on unmount
   useEffect(() => {
-    if (!containerRef.current || trades.length === 0) return;
+    if (!chartContainerRef.current) return;
 
-    const chart = createChart(containerRef.current, {
+    const chart = createChart(chartContainerRef.current, {
+      width: chartContainerRef.current.clientWidth,
+      height: 360,
       layout: {
-        background: { type: ColorType.Solid, color: "#0b1220" },
-        textColor: "#94a3b8",
+        background: { type: ColorType.Solid, color: "#0f172a" },
+        textColor: "#9ca3af",
       },
       grid: {
-        vertLines: { color: "#1e293b" },
-        horzLines: { color: "#1e293b" },
-      },
-      rightPriceScale: {
-        borderColor: "#334155",
-        scaleMargins: { top: 0.1, bottom: 0.1 },
-      },
-      timeScale: {
-        borderColor: "#334155",
-        timeVisible: true,
-        secondsVisible: true,
+        vertLines: { color: "#111827" },
+        horzLines: { color: "#111827" },
       },
       crosshair: {
         mode: 1,
-        vertLine: { color: "#64748b" },
-        horzLine: { color: "#64748b" },
       },
-      handleScroll: { vertTouchDrag: false },
-      width: containerRef.current.clientWidth,
-      height: isMobile ? 150 : 220,
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
+      rightPriceScale: {
+        borderColor: "#1f2937",
+        visible: true,
+      },
+      leftPriceScale: {
+        visible: false,
+      },
+      timeScale: {
+        rightOffset: 10,
+        barSpacing: 6,
+        fixLeftEdge: true,
+        lockVisibleTimeRangeOnResize: true,
+        borderColor: "#1f2937",
+        timeVisible: true,
+        secondsVisible: true,
+      },
     });
 
-    const lineSeries = chart.addLineSeries({
-      color: "#22c55e",
-      lineWidth: 2,
-      priceScaleId: "right",
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: "#22c55e",
+      downColor: "#ef4444",
+      borderVisible: false,
+      wickUpColor: "#22c55e",
+      wickDownColor: "#ef4444",
+      priceLineVisible: true,
+      lastValueVisible: true,
+    });
+
+    const volumeSeries = chart.addHistogramSeries({
+      priceFormat: {
+        type: "volume",
+      },
+      priceScaleId: "volume",
+    });
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0 },
     });
 
     chartRef.current = chart;
-    seriesRef.current = lineSeries;
 
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (!entries.length || !chartRef.current || !containerRef.current) return;
-      const { width, height } = containerRef.current.getBoundingClientRect();
-      chartRef.current.applyOptions({ width, height });
+    async function loadCandles() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/market/candles?interval=5`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!Array.isArray(data) || !chartRef.current) return;
+        const normalized = data.map(
+          (c: { time: number; open: number; high: number; low: number; close: number; volume?: number }) => ({
+            time: c.time as UTCTimestamp,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+          })
+        );
+        candleSeries.setData(
+          normalized.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }))
+        );
+        volumeSeries.setData(normalized.map((c) => ({ time: c.time, value: c.volume ?? 1 })));
+        chart.timeScale().scrollToPosition(5, false);
+      } catch (e) {
+        console.error("[CandlestickChart] loadCandles failed", e);
+      }
+    }
+
+    loadCandles();
+    const interval = setInterval(loadCandles, 3000);
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (!chartRef.current || !chartContainerRef.current) return;
+      chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
     });
-    resizeObserver.observe(containerRef.current);
+    resizeObserver.observe(chartContainerRef.current);
 
     return () => {
+      clearInterval(interval);
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
-      seriesRef.current = null;
     };
-  }, [isMobile]);
+  }, []);
 
-  // Update series when trade data changes
-  useEffect(() => {
-    if (!seriesRef.current || chartData.length === 0) return;
-    const sorted = ensureStrictlyIncreasingTimes(chartData);
-    seriesRef.current.setData(sorted);
-    chartRef.current?.timeScale().fitContent();
-  }, [chartData]);
-
-  if (trades.length === 0) return null;
-
-  return <div ref={containerRef} style={{ width: "100%", minHeight: isMobile ? 150 : 220 }} />;
+  return <div ref={chartContainerRef} style={{ width: "100%", height: 360 }} />;
 }
 
 // Props interface for view components
@@ -287,7 +303,7 @@ function GuestView(props: ViewProps) {
         </div>
       </div>
 
-      {/* Mini Line Chart */}
+      {/* Candlestick Chart */}
       <div
         className="chart-container"
         style={{
@@ -300,52 +316,10 @@ function GuestView(props: ViewProps) {
           width: "100%",
         }}
       >
-        {/* Header with dropdown */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
-          <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>
-            Price Trend
-          </h3>
-          <select
-            value={chartRangeMs === "ALL" ? "ALL" : chartRangeMs}
-            onChange={(e) => {
-              const val = e.target.value;
-              setChartRangeMs(val === "ALL" ? "ALL" : Number(val));
-            }}
-            className="input-terminal"
-            style={{
-              padding: "4px 8px",
-              fontSize: 12,
-              minWidth: 100,
-            }}
-          >
-            <option value={1000}>1s</option>
-            <option value={15000}>15s</option>
-            <option value={30000}>30s</option>
-            <option value={60000}>1m</option>
-            <option value={300000}>5m</option>
-            <option value="ALL">All</option>
-          </select>
+        <div style={{ marginBottom: 8 }}>
+          <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>Price Trend</h3>
         </div>
-
-        {/* Body */}
-        {chartTrades.trades.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#6b7280", padding: "12px 0" }}>
-            No trades yet — the chart will appear after the first match.
-          </div>
-        ) : (
-          <MiniChart
-            trades={chartTrades.trades}
-            usedFallback={chartTrades.usedFallback}
-            isMobile={isMobile}
-          />
-        )}
+        <CandlestickChart />
       </div>
 
       {/* Error Banner */}
@@ -676,7 +650,7 @@ function AuthedView(props: ViewProps) {
         </div>
       </div>
 
-      {/* Mini Line Chart */}
+      {/* Candlestick Chart */}
       <div
         className="chart-container"
         style={{
@@ -689,52 +663,10 @@ function AuthedView(props: ViewProps) {
           width: "100%",
         }}
       >
-        {/* Header with dropdown */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
-          <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>
-            Price Trend
-          </h3>
-          <select
-            value={chartRangeMs === "ALL" ? "ALL" : chartRangeMs}
-            onChange={(e) => {
-              const val = e.target.value;
-              setChartRangeMs(val === "ALL" ? "ALL" : Number(val));
-            }}
-            className="input-terminal"
-            style={{
-              padding: "4px 8px",
-              fontSize: 12,
-              minWidth: 100,
-            }}
-          >
-            <option value={1000}>1s</option>
-            <option value={15000}>15s</option>
-            <option value={30000}>30s</option>
-            <option value={60000}>1m</option>
-            <option value={300000}>5m</option>
-            <option value="ALL">All</option>
-          </select>
+        <div style={{ marginBottom: 8 }}>
+          <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>Price Trend</h3>
         </div>
-
-        {/* Body */}
-        {chartTrades.trades.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#6b7280", padding: "12px 0" }}>
-            No trades yet — the chart will appear after the first match.
-          </div>
-        ) : (
-          <MiniChart
-            trades={chartTrades.trades}
-            usedFallback={chartTrades.usedFallback}
-            isMobile={isMobile}
-          />
-        )}
+        <CandlestickChart />
       </div>
 
       {/* Error Banner */}
