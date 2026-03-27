@@ -7,7 +7,7 @@ import useSmartPolling from "./hooks/useSmartPolling";
 import useMarketWebSocket from "./hooks/useMarketWebSocket";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
-// Trigger redeploy
+// Trigger redeploy (no-op change)
 
 type OrderStatus = "OPEN" | "PARTIAL" | "FILLED" | "CANCELED";
 
@@ -224,7 +224,7 @@ function CandlestickChart() {
           initializedRef.current = true;
         } else {
           const last = normalized[normalized.length - 1];
-          
+
           candleSeries.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close });
           volumeSeries.update({ time: last.time, value: last.volume });
         }
@@ -285,9 +285,6 @@ function CandlestickChart() {
 // Props interface for view components
 interface ViewProps {
   tickerData: { lastPrice: number; change: number; changePercent: number; rollingAvg: number };
-  chartRangeMs: number | "ALL";
-  setChartRangeMs: (value: number | "ALL") => void;
-  chartTrades: { trades: Trade[]; usedFallback: boolean };
   isMobile: boolean;
   err: string | null;
   successMessage: string | null;
@@ -311,9 +308,6 @@ interface ViewProps {
 function GuestView(props: ViewProps) {
   const {
     tickerData,
-    chartRangeMs,
-    setChartRangeMs,
-    chartTrades,
     isMobile,
     err,
     successMessage,
@@ -657,9 +651,6 @@ function GuestView(props: ViewProps) {
 function AuthedView(props: ViewProps) {
   const {
     tickerData,
-    chartRangeMs,
-    setChartRangeMs,
-    chartTrades,
     isMobile,
     err,
     successMessage,
@@ -1120,8 +1111,6 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   const marketDot = demoMode ? "#10b981" : "#6b7280";
   const [demoSpeed, setDemoSpeed] = useState<"slow" | "normal" | "fast">("normal");
   
-  // Chart time window state
-  const [chartRangeMs, setChartRangeMs] = useState<number | "ALL">(300000); // 5m default
   const currentPrice: number | null =
     trades.length > 0 ? trades[trades.length - 1].price : null;
 
@@ -1153,7 +1142,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       .then((res) => res.json())
       .then((data: { balance: number }) => setBalance(data.balance))
       .catch(console.error);
-  }, [contextIsAuthed]);
+  }, [contextIsAuthed, authFetch]);
 
   // Fetch positions when logged in
   useEffect(() => {
@@ -1165,7 +1154,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       .then((res) => res.json())
       .then((data: { symbol: string; quantity: number; avgPrice: number }[]) => setPositions(Array.isArray(data) ? data : []))
       .catch(console.error);
-  }, [contextIsAuthed]);
+  }, [contextIsAuthed, authFetch]);
 
   // Mobile breakpoint detection: width < 768 OR height <= 520
   const [isMobile, setIsMobile] = useState(false);
@@ -1541,41 +1530,6 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       rollingAvg,
     };
   }, [sortedTrades]);
-
-  // Chart trades: filtered by time window with fallback
-  const chartTrades = useMemo(() => {
-    let filtered: Trade[] = [];
-    let usedFallback = false;
-
-    if (chartRangeMs === "ALL") {
-      // Use last 50 trades
-      filtered = sortedTrades.slice(0, 50);
-    } else {
-      // Filter by time window (exclude trades without createdAt)
-      const now = Date.now();
-      filtered = sortedTrades.filter((t) => {
-        if (!t.createdAt) return false;
-        const tradeTime = new Date(t.createdAt).getTime();
-        if (Number.isNaN(tradeTime)) return false;
-        return tradeTime >= now - chartRangeMs;
-      });
-
-      // Fallback to last 5 if filtered result is empty
-      if (filtered.length === 0) {
-        filtered = sortedTrades.slice(0, 5);
-        usedFallback = true;
-      }
-    }
-
-    // Cap at 50 max
-    filtered = filtered.slice(0, 50);
-
-    // Reverse to oldest→newest for rendering
-    return {
-      trades: [...filtered].reverse(),
-      usedFallback,
-    };
-  }, [sortedTrades, chartRangeMs]);
 
   // Sync demo status on mount and when status changes
   useEffect(() => {
@@ -2465,9 +2419,6 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         {contextIsAuthed ? (
           <AuthedView
             tickerData={tickerData}
-            chartRangeMs={chartRangeMs}
-            setChartRangeMs={setChartRangeMs}
-            chartTrades={chartTrades}
             isMobile={isMobile}
             err={err}
             successMessage={successMessage}
@@ -2490,9 +2441,6 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         ) : (
           <GuestView
             tickerData={tickerData}
-            chartRangeMs={chartRangeMs}
-            setChartRangeMs={setChartRangeMs}
-            chartTrades={chartTrades}
             isMobile={isMobile}
             err={err}
             successMessage={successMessage}

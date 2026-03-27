@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
 
@@ -32,12 +32,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAuthed = Boolean(token);
 
-  const handleUnauthorized = () => {
+  const handleUnauthorized = useCallback(() => {
     setToken(null);
     setUser(null);
     localStorage.removeItem("token");
     setSessionNotice("Session expired. Please sign in again.");
-  };
+  }, []);
 
   // Load user on mount if token exists
   useEffect(() => {
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token]);
 
-  const refreshMe = async () => {
+  const refreshMe = useCallback(async () => {
     if (!token) {
       setUser(null);
       return;
@@ -82,9 +82,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Failed to refresh user", e);
       // On network error, don't clear token (might be temporary)
     }
-  };
+  }, [token, handleUnauthorized]);
 
-  const authFetch: AuthContextType["authFetch"] = async (input, init) => {
+  const authFetch: AuthContextType["authFetch"] = useCallback(async (input, init) => {
     const headers = new Headers((init && init.headers) || undefined);
     if (token && !headers.has("Authorization")) {
       headers.set("Authorization", `Bearer ${token}`);
@@ -101,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return response;
-  };
+  }, [token, handleUnauthorized]);
 
   const login = async (email: string, password: string) => {
     try {
