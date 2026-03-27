@@ -999,7 +999,7 @@ function AuthedView(props: ViewProps) {
     devSimulation,
   } = props;
 
-  const { marketView, simulationSpeed, setSimulationSpeed } = useMarketMode();
+  const { simulationSpeed, setSimulationSpeed } = useMarketMode();
 
   return (
     <>
@@ -1950,7 +1950,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     };
   }, [sortedTrades]);
 
-  // Sync demo status on mount and when status changes
+  // Sync demo status; when signed in, start the demo if it is not running (same idea as GuestDemo).
   useEffect(() => {
     const syncDemoStatus = async () => {
       try {
@@ -1960,24 +1960,31 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
           if (data?.running !== undefined) {
             setSimulationEnabled(data.running);
           }
+          if (authLoading) return;
+          if (contextIsAuthed && data && data.running === false) {
+            const startRes = await authFetch(`${API_BASE_URL}/api/demo/start`, { method: "POST" });
+            if (startRes.ok) {
+              setSimulationEnabled(true);
+              window.dispatchEvent(new Event("demo-status-changed"));
+            }
+          }
         }
       } catch (e) {
         console.debug("Failed to sync demo status:", e);
       }
     };
-    
+
     syncDemoStatus();
-    
-    // Listen for status change events (from GuestDemo auto-start)
+
     const handleStatusChange = () => {
       syncDemoStatus();
     };
     window.addEventListener("demo-status-changed", handleStatusChange);
-    
+
     return () => {
       window.removeEventListener("demo-status-changed", handleStatusChange);
     };
-  }, []);
+  }, [contextIsAuthed, authLoading, authFetch]);
 
   const handleSimulationToggle = async (checked: boolean) => {
     const previousValue = simulationEnabled;
@@ -2611,6 +2618,59 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     navigate("/?loggedOut=true");
   };
 
+  const workspaceMain = contextIsAuthed ? (
+    <AuthedView
+      tickerData={tickerData}
+      isMobile={isMobile}
+      err={err}
+      successMessage={successMessage}
+      setSuccessMessage={setSuccessMessage}
+      form={form}
+      setForm={setForm}
+      submitOrder={submitOrder}
+      loading={loading}
+      mobileTab={mobileTab}
+      setMobileTab={setMobileTab}
+      OrderBookPanel={OrderBookPanel}
+      TradesPanel={TradesPanel}
+      HistoryPanel={HistoryPanel}
+      showOrderForm
+      onSignInClick={() => navigate("/auth?next=/app")}
+      balance={paperState.balance}
+      realizedPnL={paperState.realizedPnL}
+      positions={displayPositions}
+      currentPrice={currentPrice}
+      tradingEnabled={tradingEnabled}
+      liveAccountReady={paperAccountReady}
+      devSimulation={{
+        enabled: simulationEnabled,
+        onToggle: handleSimulationToggle,
+        starting: simulationStarting,
+        stopping: simulationStopping,
+      }}
+    />
+  ) : (
+    <GuestView
+      tickerData={tickerData}
+      isMobile={isMobile}
+      err={err}
+      successMessage={successMessage}
+      setSuccessMessage={setSuccessMessage}
+      form={form}
+      setForm={setForm}
+      submitOrder={submitOrder}
+      loading={loading}
+      mobileTab={mobileTab}
+      setMobileTab={setMobileTab}
+      OrderBookPanel={OrderBookPanel}
+      TradesPanel={TradesPanel}
+      HistoryPanel={HistoryPanel}
+      showOrderForm={mode !== "demo"}
+      onSignInClick={() => navigate("/auth?next=/app")}
+      tradingEnabled={false}
+    />
+  );
+
   return (
     <div
       className="page-enter trading-dashboard-root"
@@ -2843,58 +2903,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         style={{ maxWidth: "100%", margin: "0 auto", padding: "12px", width: "100%", minWidth: 0, boxSizing: "border-box" }}
         className="mobile-compact"
       >
-        {contextIsAuthed ? (
-          <AuthedView
-            tickerData={tickerData}
-            isMobile={isMobile}
-            err={err}
-            successMessage={successMessage}
-            setSuccessMessage={setSuccessMessage}
-            form={form}
-            setForm={setForm}
-            submitOrder={submitOrder}
-            loading={loading}
-            mobileTab={mobileTab}
-            setMobileTab={setMobileTab}
-            OrderBookPanel={OrderBookPanel}
-            TradesPanel={TradesPanel}
-            HistoryPanel={HistoryPanel}
-            showOrderForm
-            onSignInClick={() => navigate("/auth?next=/app")}
-            balance={paperState.balance}
-            realizedPnL={paperState.realizedPnL}
-            positions={displayPositions}
-            currentPrice={currentPrice}
-            tradingEnabled={tradingEnabled}
-            liveAccountReady={paperAccountReady}
-            devSimulation={{
-              enabled: simulationEnabled,
-              onToggle: handleSimulationToggle,
-              starting: simulationStarting,
-              stopping: simulationStopping,
-            }}
-          />
-        ) : (
-          <GuestView
-            tickerData={tickerData}
-            isMobile={isMobile}
-            err={err}
-            successMessage={successMessage}
-            setSuccessMessage={setSuccessMessage}
-            form={form}
-            setForm={setForm}
-            submitOrder={submitOrder}
-            loading={loading}
-            mobileTab={mobileTab}
-            setMobileTab={setMobileTab}
-            OrderBookPanel={OrderBookPanel}
-            TradesPanel={TradesPanel}
-            HistoryPanel={HistoryPanel}
-            showOrderForm={mode !== "demo"}
-            onSignInClick={() => navigate("/auth?next=/app")}
-            tradingEnabled={false}
-          />
-        )}
+        {workspaceMain}
       </div>
 
       <style>{`

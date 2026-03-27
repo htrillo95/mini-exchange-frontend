@@ -83,7 +83,17 @@ export function MarketModeProvider({ children }: { children: ReactNode }) {
       setMarketViewState("live");
       persistView("live");
     }
-    setSimulationSpeedState(readStoredSpeed());
+    try {
+      const sp = localStorage.getItem(STORAGE_SPEED);
+      if (sp === "fast" || sp === "normal") {
+        setSimulationSpeedState(sp);
+      } else {
+        setSimulationSpeedState("fast");
+        localStorage.setItem(STORAGE_SPEED, "fast");
+      }
+    } catch {
+      setSimulationSpeedState("fast");
+    }
   }, [authLoading, isAuthed]);
 
   const setMarketView = useCallback(
