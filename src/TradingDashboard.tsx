@@ -2752,150 +2752,158 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       {/* Spacer to push content down (ticker banner) */}
       <div style={{ height: 38 }} />
       
-      {/* Header Bar */}
+      {/* Header: row 1 = title + nav actions (always paired); row 2 = stats (wraps freely) */}
       <div
         style={{
           background: "#111827",
           borderBottom: "1px solid #1f2937",
           padding: "8px 12px",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
+          flexDirection: "column",
+          alignItems: "stretch",
           gap: 8,
           width: "100%",
         }}
         className="mobile-compact-header"
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-  <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>
-    Mini Exchange
-  </h1>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 8,
+            minWidth: 0,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, minWidth: 0, flex: "1 1 auto" }}>
+            <h1 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>Mini Exchange</h1>
 
-  {!contextIsAuthed && (
-    <>
-      <span
-        style={{
-          fontSize: 10,
-          padding: "2px 6px",
-          background: "#78350f",
-          color: "#fcd34d",
-          border: "1px solid #f59e0b",
-          borderRadius: 4,
-          fontWeight: 700,
-          letterSpacing: 0.5,
-        }}
-      >
-        GUEST
-      </span>
-      <span style={{ fontSize: 10, color: "#6b7280", fontWeight: 500 }}>DEMO MODE — In-Memory Simulation</span>
-    </>
-  )}
-  
-  {contextIsAuthed && contextUser && (
-    <span
-      style={{
-        fontSize: 11,
-        padding: "3px 8px",
-        background: "#1e3a8a",
-        color: "#93c5fd",
-        border: "1px solid #3b82f6",
-        borderRadius: 4,
-        fontWeight: 600,
-        letterSpacing: 0.3,
-      }}
-    >
-      {contextUser.email.split("@")[0]}
-    </span>
-  )}
-</div>
+            {!contextIsAuthed && (
+              <>
+                <span
+                  style={{
+                    fontSize: 10,
+                    padding: "2px 6px",
+                    background: "#78350f",
+                    color: "#fcd34d",
+                    border: "1px solid #f59e0b",
+                    borderRadius: 4,
+                    fontWeight: 700,
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  GUEST
+                </span>
+                <span style={{ fontSize: 10, color: "#6b7280", fontWeight: 500 }}>DEMO MODE — In-Memory Simulation</span>
+              </>
+            )}
 
-        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-            <span style={{ color: "#9ca3af" }}>
-              {buy.length} buys • {sell.length} sells • {totalTrades} trades
-        </span>
+            {contextIsAuthed && contextUser && (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "3px 8px",
+                  background: "#1e3a8a",
+                  color: "#93c5fd",
+                  border: "1px solid #3b82f6",
+                  borderRadius: 4,
+                  fontWeight: 600,
+                  letterSpacing: 0.3,
+                }}
+              >
+                {contextUser.email.split("@")[0]}
+              </span>
+            )}
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-  <div
-    style={{
-      background: marketDot,
-      borderRadius: "50%",
-      width: 8,
-      height: 8,
-      animation: headerSimulationActive ? "pulse 1.2s infinite" : "none",
-    }}
-  />
-  <span
-    style={{
-      fontSize: 12,
-      fontWeight: 700,
-      color: headerSimulationActive ? "#10b981" : "#9ca3af",
-      letterSpacing: 0.5,
-      fontFamily: "monospace",
-    }}
-  >
-    {marketStatus}
-  </span>
-
-  {/* optional small sync stamp (does NOT replace status) */}
-  {lastSyncAt && (
-    <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace" }}>
-      • {new Date(lastSyncAt).toLocaleTimeString()}
-    </span>
-  )}
-
-  {/* WebSocket: useMarketWebSocket subscribes to backend feed; wsConnected reflects real socket state */}
-  {(simulationEnabled || contextIsAuthed) && (
-    <span
-      style={{
-        fontSize: 10,
-        padding: "2px 6px",
-        background: wsConnected ? "#065f46" : "#374151",
-        color: wsConnected ? "#6ee7b7" : "#9ca3af",
-        border: `1px solid ${wsConnected ? "#10b981" : "#4b5563"}`,
-        borderRadius: 4,
-        fontWeight: 600,
-        letterSpacing: 0.3,
-        fontFamily: "monospace",
-      }}
-    >
-      WS {wsConnected ? "ON" : "OFF"}
-    </span>
-  )}
-</div>
-
-          {contextIsAuthed ? (
-            <>
-              <button
-                type="button"
-                onClick={() => navigate("/")}
-                className="btn-secondary"
-                style={{ padding: "6px 12px", fontSize: 13 }}
-              >
-                Home
+          <div style={{ flexShrink: 0, display: "flex", alignItems: "center", paddingTop: 2 }}>
+            {contextIsAuthed ? (
+              <div className="mobile-header-actions">
+                <button
+                  type="button"
+                  onClick={() => navigate("/")}
+                  className="mobile-header-icon-btn"
+                  aria-label="Home"
+                  title="Home"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                    <polyline points="9 22 9 12 15 12 15 22" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowLogoutConfirm(true)}
+                  className="mobile-header-icon-btn"
+                  aria-label="Log out"
+                  title="Log out"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              <button type="button" onClick={() => navigate("/auth?next=/app")} className="mobile-header-signin">
+                Sign in
               </button>
-              <button
-                type="button"
-                onClick={() => setShowLogoutConfirm(true)}
-                className="btn-secondary"
-                style={{ padding: "6px 12px", fontSize: 13 }}
-              >
-                Logout
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => navigate("/auth?next=/app")}
-              className="btn-secondary"
-              style={{ padding: "6px 12px", fontSize: 13 }}
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, rowGap: 6, fontSize: 13, minWidth: 0 }}>
+          <span style={{ color: "#9ca3af" }}>
+            {buy.length} buys • {sell.length} sells • {totalTrades} trades
+          </span>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div
+              style={{
+                background: marketDot,
+                borderRadius: "50%",
+                width: 8,
+                height: 8,
+                animation: headerSimulationActive ? "pulse 1.2s infinite" : "none",
+              }}
+            />
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 700,
+                color: headerSimulationActive ? "#10b981" : "#9ca3af",
+                letterSpacing: 0.5,
+                fontFamily: "monospace",
+              }}
             >
-              Sign in
-            </button>
-          )}
+              {marketStatus}
+            </span>
 
+            {lastSyncAt && (
+              <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace" }}>
+                • {new Date(lastSyncAt).toLocaleTimeString()}
+              </span>
+            )}
+
+            {(simulationEnabled || contextIsAuthed) && (
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: "2px 6px",
+                  background: wsConnected ? "#065f46" : "#374151",
+                  color: wsConnected ? "#6ee7b7" : "#9ca3af",
+                  border: `1px solid ${wsConnected ? "#10b981" : "#4b5563"}`,
+                  borderRadius: 4,
+                  fontWeight: 600,
+                  letterSpacing: 0.3,
+                  fontFamily: "monospace",
+                }}
+              >
+                WS {wsConnected ? "ON" : "OFF"}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
