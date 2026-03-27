@@ -30,6 +30,17 @@ type Trade = {
   createdAt?: string;
 };
 
+/** True when fetch failed at the network layer (offline, CORS, wrong host), not HTTP 4xx/5xx. */
+function isBrowserNetworkError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const m = e.message;
+  return (
+    m === "Failed to fetch" ||
+    m === "NetworkError when attempting to fetch resource." ||
+    m === "Load failed"
+  );
+}
+
 function formatRelativeTime(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -72,6 +83,30 @@ function StatusChip({ status }: { status: OrderStatus }) {
   );
 }
 
+/** Normalize API candle time to UTCTimestamp (unix seconds) for lightweight-charts. */
+function normalizeCandleApiTime(raw: unknown): UTCTimestamp {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0 as UTCTimestamp;
+  const sec = n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+  return sec as UTCTimestamp;
+}
+
+/** Ensure strictly increasing time so the chart does not assert on duplicate bars. */
+function ensureStrictlyIncreasingCandles<
+  T extends { time: UTCTimestamp; open: number; high: number; low: number; close: number; volume: number }
+>(rows: T[]): T[] {
+  const sorted = [...rows].sort((a, b) => Number(a.time) - Number(b.time));
+  for (let i = 1; i < sorted.length; i++) {
+    if (Number(sorted[i].time) <= Number(sorted[i - 1].time)) {
+      sorted[i] = {
+        ...sorted[i],
+        time: (Number(sorted[i - 1].time) + 1) as UTCTimestamp,
+      };
+    }
+  }
+  return sorted;
+}
+
 const CHART_OPTIONS = {
   layout: {
     background: { type: ColorType.Solid as const, color: "#0f172a" },
@@ -104,6 +139,8 @@ function CandlestickChart() {
   const volumeByTimeRef = useRef<Map<number, number>>(new Map());
   const initializedRef = useRef(false);
   const syncingRef = useRef(false);
+  /** null = chart has data; 'empty' = OK response but no bars; 'error' = request/parse failure */
+  const [candleNotice, setCandleNotice] = useState<"empty" | "error" | null>(null);
 
   useEffect(() => {
     if (!priceContainerRef.current || !volumeContainerRef.current || !wrapperRef.current) return;
@@ -184,33 +221,52 @@ function CandlestickChart() {
     async function loadCandles() {
       try {
         const res = await fetch(`${API_BASE_URL}/api/market/candles?interval=5`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.warn("[CandlestickChart] candles HTTP", res.status, res.statusText);
+          setCandleNotice("error");
+          return;
+        }
         const data = await res.json();
-        if (!Array.isArray(data) || !priceChartRef.current || !volumeChartRef.current) return;
-        const normalized = data.map(
-          (c: { time: number; open: number; high: number; low: number; close: number; volume?: number }) => ({
-            time: c.time as UTCTimestamp,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-            volume: c.volume ?? 1,
-          })
-        );
+        if (!Array.isArray(data) || !priceChartRef.current || !volumeChartRef.current) {
+          setCandleNotice("error");
+          return;
+        }
 
-        normalized.sort((a, b) => Number(a.time) - Number(b.time));
-        if (normalized.length === 0) return;
+        const mapped = data
+          .map(
+            (c: { time: unknown; open: number; high: number; low: number; close: number; volume?: number }) => ({
+              time: normalizeCandleApiTime(c.time),
+              open: c.open,
+              high: c.high,
+              low: c.low,
+              close: c.close,
+              volume: c.volume ?? 1,
+            })
+          )
+          .filter((c) => Number(c.time) > 0);
 
-        const candles = normalized.map((c) => ({ 
-          time: c.time, 
-          open: c.open, 
-          high: c.high, 
-          low: c.low, 
-          close: c.close }));
-        const volumes = normalized.map((c) => ({ 
-          time: c.time, 
-          value: c.volume }));
+        const normalized = ensureStrictlyIncreasingCandles(mapped);
 
+        if (normalized.length === 0) {
+          setCandleNotice("empty");
+          return;
+        }
+
+        setCandleNotice(null);
+
+        const candles = normalized.map((c) => ({
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }));
+        const volumes = normalized.map((c) => ({
+          time: c.time,
+          value: c.volume,
+        }));
+
+        volumeByTimeRef.current.clear();
         normalized.forEach((c) => volumeByTimeRef.current.set(c.time as number, c.volume));
 
         if (!initializedRef.current) {
@@ -230,11 +286,12 @@ function CandlestickChart() {
         }
       } catch (e) {
         console.error("[CandlestickChart] loadCandles failed", e);
+        setCandleNotice("error");
       }
     }
 
     loadCandles();
-    const interval = setInterval(loadCandles, 3000);
+    const interval = setInterval(loadCandles, 5000);
 
     const resizeObserver = new ResizeObserver(() => {
       if (!wrapperRef.current || !priceChartRef.current || !volumeChartRef.current) return;
@@ -257,6 +314,23 @@ function CandlestickChart() {
 
   return (
     <div ref={wrapperRef} style={{ width: "100%", position: "relative" }}>
+      {candleNotice !== null && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 6,
+            left: 8,
+            right: 8,
+            zIndex: 2,
+            fontSize: 12,
+            color: "#6b7280",
+            textAlign: "center",
+            pointerEvents: "none",
+          }}
+        >
+          {candleNotice === "empty" ? "Waiting for market activity..." : "Demo data unavailable"}
+        </div>
+      )}
       <div style={{ position: "relative" }}>
         <div id="price-chart" ref={priceContainerRef} style={{ width: "100%", height: 320 }} />
         <div
@@ -1224,90 +1298,106 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   // };
 
   const fetchAllData = async () => {
-    try {
+    const isAuthed = contextIsAuthed;
+
+    if (isAuthed) {
       showError(null);
-      const isAuthed = contextIsAuthed;
-  
-      // history url (only meaningful when authed)
-      let historyUrl = `${API_BASE_URL}/api/orders/history?limit=50`;
-      if (mineOnly && myOrderIds.size > 0) {
-        const idsParam = Array.from(myOrderIds).join(",");
-        historyUrl = `${API_BASE_URL}/api/orders/by-ids?ids=${idsParam}`;
-      }
-  
-      const bookUrl = isAuthed
-        ? `${API_BASE_URL}/api/orders/open?limit=200` // protected
-        : `${API_BASE_URL}/api/orders/book`;          // public
-  
-      const [bookRes, tradesRes, historyRes] = await Promise.all([
-        isAuthed ? authFetch(bookUrl) : fetch(bookUrl),
-        fetch(`${API_BASE_URL}/api/orders/trades/db?limit=200`),
-        isAuthed ? authFetch(historyUrl) : Promise.resolve(null),
-      ]);
-  
-      if (!bookRes.ok) throw new Error("Failed to fetch order book");
-      if (!tradesRes.ok) throw new Error("Failed to fetch trades");
-      if (isAuthed && historyRes && !historyRes.ok) throw new Error("Failed to fetch order history");
-  
-      const bookData = await bookRes.json();
-      const tradesData = await tradesRes.json();
-      const historyData = isAuthed && historyRes ? await historyRes.json() : [];
-  
-      // If guest + /book returns {buy:[], sell:[]}, flatten to one array like your UI expects
-      const normalizedBook: Order[] = Array.isArray(bookData)
-        ? bookData
-        : [...(bookData.buy || []), ...(bookData.sell || [])];
-  
-      const filteredBook = normalizedBook.filter((o: Order) => o.quantity > 0);
-      setOrderBook(filteredBook);
-  
-      // flash logic (unchanged)
-      if (tradesData.length > 0) {
-        const newestTrade = tradesData[0];
-        const tradeKey = newestTrade.id || newestTrade.createdAt;
-        if (tradeKey && tradeKey !== lastTradeId) {
-          setLastTradeId(tradeKey);
-  
-          const buyPrices = filteredBook.filter((o: Order) => o.type === "buy").map((o: Order) => o.price);
-          const sellPrices = filteredBook.filter((o: Order) => o.type === "sell").map((o: Order) => o.price);
-          const avgBuy = buyPrices.length ? buyPrices.reduce((a: number, b: number) => a + b, 0) / buyPrices.length : 0;
-          const avgSell = sellPrices.length ? sellPrices.reduce((a: number, b: number) => a + b, 0) / sellPrices.length : 0;
-          const midpoint = avgBuy > 0 && avgSell > 0 ? (avgBuy + avgSell) / 2 : newestTrade.price;
-          const isBuySide = newestTrade.price >= midpoint;
-  
-          setTimeout(() => {
-            const element = flashRefs.current.get(tradeKey);
-            if (element) {
-              element.style.animation = "none";
-              setTimeout(() => {
-                if (isBuySide) {
-                  element.style.background = "#064e3b";
-                  element.style.borderLeft = "2px solid #10b981";
-                } else {
-                  element.style.background = "#7f1d1d";
-                  element.style.borderLeft = "2px solid #ef4444";
-                }
-                setTimeout(() => {
-                  element.style.background = "#0f172a";
-                  element.style.borderLeft = "2px solid #1f2937";
-                }, 1500);
-              }, 10);
-            }
-          }, 100);
-        }
-      }
-  
-      setTrades(tradesData);
-      setOrderHistory(historyData)
-      setLastSyncAt(Date.now());
-    } catch (e: any) {
-      let message = e?.message || "Something went wrong";
-      if (typeof message === "string" && message.includes("Failed to fetch")) {
-        console.error("Network error while fetching market data", e);
-        message = "Unable to reach the exchange API. Please check your connection or try again shortly.";
-      }
-      showError(message);
     }
+
+    let historyUrl = `${API_BASE_URL}/api/orders/history?limit=50`;
+    if (mineOnly && myOrderIds.size > 0) {
+      const idsParam = Array.from(myOrderIds).join(",");
+      historyUrl = `${API_BASE_URL}/api/orders/by-ids?ids=${idsParam}`;
+    }
+
+    const bookUrl = isAuthed
+      ? `${API_BASE_URL}/api/orders/open?limit=200`
+      : `${API_BASE_URL}/api/orders/book`;
+
+    const tradesUrl = `${API_BASE_URL}/api/orders/trades?limit=200`;
+
+    let filteredBookForFlash: Order[] = [];
+
+    try {
+      const bookRes = isAuthed ? await authFetch(bookUrl) : await fetch(bookUrl);
+      if (bookRes.ok) {
+        const bookData = await bookRes.json();
+        const normalizedBook: Order[] = Array.isArray(bookData)
+          ? bookData
+          : [...(bookData.buy || []), ...(bookData.sell || [])];
+        filteredBookForFlash = normalizedBook.filter((o: Order) => o.quantity > 0);
+        setOrderBook(filteredBookForFlash);
+      } else {
+        console.warn("[fetchAllData] book HTTP", bookRes.status);
+      }
+    } catch (e) {
+      console.error("[fetchAllData] book failed", e);
+    }
+
+    let tradesData: Trade[] = [];
+    try {
+      const tradesRes = isAuthed ? await authFetch(tradesUrl) : await fetch(tradesUrl);
+      if (tradesRes.ok) {
+        const parsed = await tradesRes.json();
+        tradesData = Array.isArray(parsed) ? parsed : [];
+        setTrades(tradesData);
+      } else {
+        console.warn("[fetchAllData] trades HTTP", tradesRes.status);
+      }
+    } catch (e) {
+      console.error("[fetchAllData] trades failed", e);
+    }
+
+    if (isAuthed) {
+      try {
+        const historyRes = await authFetch(historyUrl);
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          setOrderHistory(Array.isArray(historyData) ? historyData : []);
+        } else {
+          console.warn("[fetchAllData] history HTTP", historyRes.status);
+        }
+      } catch (e) {
+        console.error("[fetchAllData] history failed", e);
+      }
+    }
+
+    if (tradesData.length > 0) {
+      const newestTrade = tradesData[0];
+      const tradeKey = newestTrade.id || newestTrade.createdAt;
+      if (tradeKey && tradeKey !== lastTradeId) {
+        setLastTradeId(tradeKey);
+
+        const buyPrices = filteredBookForFlash.filter((o: Order) => o.type === "buy").map((o: Order) => o.price);
+        const sellPrices = filteredBookForFlash.filter((o: Order) => o.type === "sell").map((o: Order) => o.price);
+        const avgBuy = buyPrices.length ? buyPrices.reduce((a: number, b: number) => a + b, 0) / buyPrices.length : 0;
+        const avgSell = sellPrices.length ? sellPrices.reduce((a: number, b: number) => a + b, 0) / sellPrices.length : 0;
+        const midpoint = avgBuy > 0 && avgSell > 0 ? (avgBuy + avgSell) / 2 : newestTrade.price;
+        const isBuySide = newestTrade.price >= midpoint;
+
+        setTimeout(() => {
+          const element = flashRefs.current.get(tradeKey);
+          if (element) {
+            element.style.animation = "none";
+            setTimeout(() => {
+              if (isBuySide) {
+                element.style.background = "#064e3b";
+                element.style.borderLeft = "2px solid #10b981";
+              } else {
+                element.style.background = "#7f1d1d";
+                element.style.borderLeft = "2px solid #ef4444";
+              }
+              setTimeout(() => {
+                element.style.background = "#0f172a";
+                element.style.borderLeft = "2px solid #1f2937";
+              }, 1500);
+            }, 10);
+          }
+        }, 100);
+      }
+    }
+
+    setLastSyncAt(Date.now());
   };
 
   // Poll all endpoints every 2s (regardless of demoMode).
@@ -1438,9 +1528,12 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
 
     } catch (e: any) {
       let message = e?.message || "Submit failed";
-      if (typeof message === "string" && message.includes("Failed to fetch")) {
+      if (isBrowserNetworkError(e)) {
         console.error("Network error while submitting order", e);
-        message = "Unable to reach the exchange API. Please try again in a moment.";
+        message =
+          !contextIsAuthed || demoMode
+            ? "Demo market running locally"
+            : "Unable to reach the exchange API. Please try again in a moment.";
       }
       showError(message);
     } finally {
@@ -1465,9 +1558,11 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       await fetchAllData();
     } catch (e: any) {
       let message = e?.message || "Cancel failed";
-      if (typeof message === "string" && message.includes("Failed to fetch")) {
+      if (isBrowserNetworkError(e)) {
         console.error("Network error while cancelling order", e);
-        message = "Unable to reach the exchange API. Please try again in a moment.";
+        message = demoMode
+          ? "Demo market running locally"
+          : "Unable to reach the exchange API. Please try again in a moment.";
       }
       showError(message);
     } finally {
@@ -1592,7 +1687,15 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     } catch (e: any) {
       // Revert checkbox on error
       setDemoMode(previousValue);
-      showError(e?.message || "Failed to toggle demo mode. Please try again.");
+      if (isBrowserNetworkError(e)) {
+        showError(
+          !contextIsAuthed
+            ? "Demo market running locally"
+            : "Unable to reach the exchange API. Please try again shortly."
+        );
+      } else {
+        showError(e?.message || "Failed to toggle demo mode. Please try again.");
+      }
     } finally {
       setDemoStarting(false);
       setDemoStopping(false);
@@ -1929,7 +2032,13 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       await fetchAllData();
       setSuccessMessage("Order canceled");
     } catch (e: any) {
-      showError(e?.message || "Failed to cancel order");
+      let message = e?.message || "Failed to cancel order";
+      if (isBrowserNetworkError(e)) {
+        message = demoMode
+          ? "Demo market running locally"
+          : "Unable to reach the exchange API. Please try again in a moment.";
+      }
+      showError(message);
     }
   };
 
@@ -2262,20 +2371,23 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   </h1>
 
   {!contextIsAuthed && (
-    <span
-      style={{
-        fontSize: 10,
-        padding: "2px 6px",
-        background: "#78350f",
-        color: "#fcd34d",
-        border: "1px solid #f59e0b",
-        borderRadius: 4,
-        fontWeight: 700,
-        letterSpacing: 0.5,
-      }}
-    >
-      GUEST
-    </span>
+    <>
+      <span
+        style={{
+          fontSize: 10,
+          padding: "2px 6px",
+          background: "#78350f",
+          color: "#fcd34d",
+          border: "1px solid #f59e0b",
+          borderRadius: 4,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+        }}
+      >
+        GUEST
+      </span>
+      <span style={{ fontSize: 10, color: "#6b7280", fontWeight: 500 }}>DEMO MODE — In-Memory Simulation</span>
+    </>
   )}
   
   {contextIsAuthed && contextUser && (
@@ -2353,14 +2465,24 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
 </div>
 
           {contextIsAuthed ? (
-            <button
-              type="button"
-              onClick={() => setShowLogoutConfirm(true)}
-              className="btn-secondary"
-              style={{ padding: "6px 12px", fontSize: 13 }}
-            >
-              Logout
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => navigate("/")}
+                className="btn-secondary"
+                style={{ padding: "6px 12px", fontSize: 13 }}
+              >
+                Home
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLogoutConfirm(true)}
+                className="btn-secondary"
+                style={{ padding: "6px 12px", fontSize: 13 }}
+              >
+                Logout
+              </button>
+            </>
           ) : (
             <button
               type="button"
@@ -2412,6 +2534,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
               </span>
             )}
           </div>
+
         </div>
       </div>
 

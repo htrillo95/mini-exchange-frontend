@@ -1,11 +1,13 @@
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import Toast from "../components/Toast";
+import { useAuth } from "../auth/AuthContext";
 
 export default function GuestHome() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [logoutToast, setLogoutToast] = useState(false);
+  const { isAuthed } = useAuth();
 
   // Show logout success message if coming from logout
   useEffect(() => {
@@ -61,12 +63,38 @@ export default function GuestHome() {
           style={{
             fontSize: 16,
             color: "#9ca3af",
-            marginBottom: 32,
+            marginBottom: 14,
             lineHeight: 1.6,
           }}
         >
           A simulated market environment built to study exchange mechanics, order flow, and trading interfaces. All activity is synthetic and for demonstration only.
         </p>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: 12,
+            fontSize: 12,
+            color: "#6b7280",
+            marginBottom: 18,
+            flexWrap: "wrap",
+          }}
+        >
+          <span>
+            <span
+              className="status-dot"
+              style={{
+                color: "#22c55e",
+              }}
+            >
+              ●
+            </span>{" "}
+            Live demo market
+          </span>
+          <span>•</span>
+          <span>Real-time candles</span>
+        </div>
+        <div style={{ height: 1, background: "#1f2937", marginBottom: 18 }} />
 
         <div
           style={{
@@ -76,34 +104,90 @@ export default function GuestHome() {
             alignItems: "stretch",
           }}
         >
-          <button
-            onClick={() => navigate("/demo")}
-            className="btn-primary"
-            style={{
-              padding: "12px 24px",
-              fontSize: 16,
-              fontWeight: 600,
-              width: "100%",
-            }}
-          >
-            Enter Exchange (Demo)
-          </button>
-          <button
-            onClick={() => navigate("/auth?next=/app")}
-            className="btn-secondary"
-            style={{
-              padding: "12px 24px",
-              fontSize: 16,
-              fontWeight: 600,
-              width: "100%",
-            }}
-          >
-            Sign in
-          </button>
+          {isAuthed ? (
+            <>
+              <button
+                onClick={() => navigate("/app")}
+                className="btn-primary"
+                style={{
+                  padding: "12px 24px",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  width: "100%",
+                }}
+              >
+                Return to Exchange
+              </button>
+              <button
+                onClick={() => navigate("/demo")}
+                className="btn-secondary"
+                style={{
+                  padding: "12px 24px",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  width: "100%",
+                }}
+              >
+                Open Demo Market
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => navigate("/demo")}
+                className="btn-primary"
+                style={{
+                  padding: "12px 24px",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  width: "100%",
+                }}
+              >
+                Enter Exchange (Demo)
+              </button>
+              <button
+                onClick={() => navigate("/auth?next=/app")}
+                className="btn-secondary"
+                style={{
+                  padding: "12px 24px",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  width: "100%",
+                }}
+              >
+                Sign in
+              </button>
+            </>
+          )}
         </div>
+        <div style={{ marginTop: 12 }}>
+          <Link to="/news" style={{ color: "#93c5fd", textDecoration: "none", fontSize: 13 }}>
+            Open Workspace
+          </Link>
+        </div>
+        <p style={{ marginTop: 12, fontSize: 12, color: "#6b7280" }}>
+          {isAuthed ? "You are signed in. Your exchange state is active." : "No account needed for demo."}
+        </p>
       </div>
 
       <style>{`
+        @keyframes status-pulse {
+          0% {
+            opacity: 0.5;
+          }
+          50% {
+            opacity: 1;
+          }
+          100% {
+            opacity: 0.5;
+          }
+        }
+
+        .status-dot {
+          display: inline-block;
+          animation: status-pulse 1.8s ease-in-out infinite;
+        }
+
         .btn-primary {
           background: #3b82f6;
           color: #ffffff;

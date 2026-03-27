@@ -6,6 +6,8 @@ import RequireAuth from "./auth/RequireAuth";
 import RedirectIfAuthed from "./auth/RedirectIfAuthed";
 import ToastHost from "./components/ToastHost";
 import GuestDemo from "./pages/GuestDemo";
+import NewsPage from "./pages/NewsPage";
+import AboutPage from "./pages/AboutPage";
 
 export default function App() {
   return (
@@ -14,6 +16,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<GuestHome />} />
         <Route path="/demo" element={<GuestDemo />} />
+        <Route path="/news" element={<NewsPage />} />
+        <Route path="/about" element={<AboutPage />} />
         <Route
           path="/app"
           element={
