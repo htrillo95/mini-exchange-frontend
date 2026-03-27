@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { createChart, ColorType, UTCTimestamp } from "lightweight-charts";
 import { useAuth } from "./auth/AuthContext";
@@ -607,12 +607,14 @@ interface ViewProps {
   HistoryPanel: () => React.ReactElement;
   showOrderForm: boolean;
   onSignInClick: () => void;
+  /** Paper portfolio (localStorage); never show 0 until hydrated. */
   balance?: number | null;
+  realizedPnL?: number | null;
   positions?: { symbol: string; quantity: number; avgPrice: number }[];
   currentPrice?: number | null;
   /** Live market + signed in: show account, positions, orders, history. */
   tradingEnabled: boolean;
-  /** Live (API) account: false until first fetch settles. */
+  /** Auth + paper state ready for account row (avoids flashing 0). */
   liveAccountReady?: boolean;
   devSimulation?: {
     enabled: boolean;
@@ -989,6 +991,7 @@ function AuthedView(props: ViewProps) {
     TradesPanel,
     HistoryPanel,
     balance,
+    realizedPnL = null,
     positions = [],
     currentPrice,
     tradingEnabled,
@@ -1161,10 +1164,26 @@ function AuthedView(props: ViewProps) {
             {liveAccountReady === false ? (
               <div style={{ fontSize: 14, color: "#6b7280" }}>Loading account…</div>
             ) : (
-              <div style={{ fontSize: 16, fontWeight: 600, color: "#e5e7eb", fontFamily: "monospace" }}>
-                Balance: $
-                {(balance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </div>
+              <>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "#e5e7eb", fontFamily: "monospace" }}>
+                  Balance: $
+                  {(balance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: "monospace",
+                    marginTop: 6,
+                    color:
+                      (realizedPnL ?? 0) > 0 ? "#22c55e" : (realizedPnL ?? 0) < 0 ? "#ef4444" : "#9ca3af",
+                  }}
+                >
+                  {`Realized P&L: `}
+                  {(realizedPnL ?? 0) >= 0 ? "+" : ""}
+                  {(realizedPnL ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </>
             )}
           </div>
 
@@ -1406,7 +1425,13 @@ type TradingDashboardProps = {
 
 export default function TradingDashboard({ mode = "full" }: TradingDashboardProps) {
   const navigate = useNavigate();
-  const { isAuthed: contextIsAuthed, user: contextUser, logout: contextLogout, authFetch } = useAuth();
+  const {
+    isAuthed: contextIsAuthed,
+    user: contextUser,
+    logout: contextLogout,
+    authFetch,
+    loading: authLoading,
+  } = useAuth();
   const { marketView, simulationSpeed } = useMarketMode();
   /** Live data + trading UI: only when signed in and viewing Live market. */
   const tradingEnabled = marketView === "live" && contextIsAuthed;
@@ -1422,25 +1447,35 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [balance, setBalance] = useState<number | null>(null);
-  const [positions, setPositions] = useState<{ symbol: string; quantity: number; avgPrice: number }[]>([]);
-  const [paperState, setPaperState] = useState<PaperState>(() => loadPaperState(paperStorageKey));
-  const [liveAccountReady, setLiveAccountReady] = useState(false);
+  const [paperState, setPaperState] = useState<PaperState>(() => loadPaperState(null));
   const lastErrorRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    setPaperState(loadPaperState(paperStorageKey));
-  }, [paperStorageKey]);
-
-  useEffect(() => {
-    if (!paperStorageKey || !contextIsAuthed) return;
+  /** Sync paper portfolio from localStorage before paint; create default row for new users (no overwrite). */
+  useLayoutEffect(() => {
+    if (!paperStorageKey || !contextIsAuthed) {
+      setPaperState(loadPaperState(null));
+      return;
+    }
     const existing = localStorage.getItem(paperStorageKey);
     if (!existing) {
       const next = { ...PAPER_DEFAULT };
       savePaperState(paperStorageKey, next);
       setPaperState(next);
+    } else {
+      setPaperState(loadPaperState(paperStorageKey));
     }
   }, [paperStorageKey, contextIsAuthed]);
+
+  const paperAccountReady =
+    Boolean(paperStorageKey) && tradingEnabled && !authLoading && Boolean(contextUser?.email);
+
+  const displayPositions = useMemo(() => {
+    if (!tradingEnabled) return [];
+    if (paperState.positionQty > 0) {
+      return [{ symbol: "DEMO", quantity: paperState.positionQty, avgPrice: paperState.avgCost }];
+    }
+    return [];
+  }, [tradingEnabled, paperState.positionQty, paperState.avgCost]);
 
   const showError = useCallback(
     (message: string | null) => {
@@ -1511,35 +1546,6 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     }, ms);
     return () => clearInterval(interval);
   }, [simulationSpeed]);
-
-  useEffect(() => {
-    if (!contextIsAuthed || marketView === "demo") {
-      setBalance(null);
-      setLiveAccountReady(true);
-      return;
-    }
-    setLiveAccountReady(false);
-    authFetch(`${API_BASE_URL}/api/account`)
-      .then((res) => res.json())
-      .then((data: { balance: number }) => {
-        setBalance(typeof data.balance === "number" ? data.balance : 0);
-      })
-      .catch(() => {
-        setBalance(0);
-      })
-      .finally(() => setLiveAccountReady(true));
-  }, [contextIsAuthed, marketView, authFetch]);
-
-  useEffect(() => {
-    if (!contextIsAuthed || marketView === "demo") {
-      setPositions([]);
-      return;
-    }
-    authFetch(`${API_BASE_URL}/api/positions`)
-      .then((res) => res.json())
-      .then((data: { symbol: string; quantity: number; avgPrice: number }[]) => setPositions(Array.isArray(data) ? data : []))
-      .catch(console.error);
-  }, [contextIsAuthed, marketView, authFetch]);
 
   // Mobile breakpoint detection: width < 768 OR height <= 520
   const [isMobile, setIsMobile] = useState(false);
@@ -1806,7 +1812,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         orderData?.orderId ??
         null;
 
-      if (contextIsAuthed && !useLiveData && orderData) {
+      if (contextIsAuthed && orderData && paperStorageKey) {
         setPaperState((prev) => {
           const next = applyPaperAfterDemoOrder(form, orderData, prev);
           savePaperState(paperStorageKey, next);
@@ -2606,7 +2612,10 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   };
 
   return (
-    <div style={{ minHeight: "100dvh", background: "#0b0f17", color: "#e5e7eb", width: "100%", maxWidth: "100%" }}>
+    <div
+      className="page-enter trading-dashboard-root"
+      style={{ minHeight: "100dvh", background: "#0b0f17", color: "#e5e7eb", width: "100%", maxWidth: "100%", minWidth: 0 }}
+    >
       {/* Offline Banner (global) */}
       {isOffline && (
         <div
@@ -2777,7 +2786,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     </span>
   )}
 
-  {/* WebSocket status chip */}
+  {/* WebSocket: useMarketWebSocket subscribes to backend feed; wsConnected reflects real socket state */}
   {(simulationEnabled || contextIsAuthed) && (
     <span
       style={{
@@ -2830,7 +2839,10 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         </div>
       </div>
 
-      <div style={{ maxWidth: "100%", margin: "0 auto", padding: "12px", width: "100%" }} className="mobile-compact">
+      <div
+        style={{ maxWidth: "100%", margin: "0 auto", padding: "12px", width: "100%", minWidth: 0, boxSizing: "border-box" }}
+        className="mobile-compact"
+      >
         {contextIsAuthed ? (
           <AuthedView
             tickerData={tickerData}
@@ -2849,11 +2861,12 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
             HistoryPanel={HistoryPanel}
             showOrderForm
             onSignInClick={() => navigate("/auth?next=/app")}
-            balance={balance}
-            positions={positions}
+            balance={paperState.balance}
+            realizedPnL={paperState.realizedPnL}
+            positions={displayPositions}
             currentPrice={currentPrice}
             tradingEnabled={tradingEnabled}
-            liveAccountReady={liveAccountReady}
+            liveAccountReady={paperAccountReady}
             devSimulation={{
               enabled: simulationEnabled,
               onToggle: handleSimulationToggle,
@@ -2985,6 +2998,13 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         @media (max-width: 767px) {
           .main-grid {
             grid-template-columns: 1fr !important;
+            min-width: 0;
+            width: 100%;
+            max-width: 100%;
+          }
+          .main-grid-mobile {
+            min-width: 0;
+            max-width: 100%;
           }
         }
       `}</style>

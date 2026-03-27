@@ -137,6 +137,7 @@ export default function AuthPage() {
 
   return (
     <div
+      className="page-enter"
       style={{
         minHeight: "100dvh",
         background: "#0b0f17",
@@ -146,6 +147,10 @@ export default function AuthPage() {
         alignItems: "center",
         justifyContent: "center",
         padding: "20px",
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
       }}
     >
       {successMessage && (

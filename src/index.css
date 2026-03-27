@@ -11,6 +11,21 @@ body {
   margin: 0;
 }
 
+#root {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.app-root {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
@@ -86,6 +101,9 @@ code {
 
   .mobile-compact-header {
     padding: 8px 12px !important;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
   }
 
   /* Chart height reduction for landscape */
@@ -256,4 +274,196 @@ code {
   .ticker-text {
     font-size: 11px;
   }
+}
+
+/* --- Page mount: fade + slight lift (CSS only, no extra deps) --- */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-enter {
+  animation: page-enter 0.3s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* --- Home CTA hover (pointer devices only; avoids sticky hover on touch) --- */
+.home-cta {
+  transform-origin: center;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .home-cta--primary:hover:not(:disabled) {
+    transform: scale(1.03);
+    box-shadow: 0 12px 28px rgba(59, 130, 246, 0.35);
+  }
+  .home-cta--secondary:hover:not(:disabled) {
+    transform: scale(1.03);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* --- Nav link: underline grows from left --- */
+.nav-link-animated {
+  position: relative;
+  display: inline-block;
+  color: #93c5fd;
+  text-decoration: none;
+  font-size: 13px;
+  transition: color 0.2s ease;
+}
+
+.nav-link-animated::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 0;
+  height: 1px;
+  background: currentColor;
+  transition: width 0.2s ease;
+}
+
+.nav-link-animated--muted {
+  color: #9ca3af;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-link-animated:hover {
+    color: #bfdbfe;
+  }
+  .nav-link-animated--muted:hover {
+    color: #d1d5db;
+  }
+  .nav-link-animated:hover::after {
+    width: 100%;
+  }
+}
+
+/* --- Workspace (News / About): responsive shell --- */
+.workspace-page {
+  box-sizing: border-box;
+}
+
+.workspace-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.workspace-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 24px 16px;
+  border-bottom: 1px solid #1f2937;
+}
+
+.workspace-aside {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: hidden;
+  padding: 24px 16px;
+}
+
+@media (min-width: 768px) {
+  .workspace-shell {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .workspace-main {
+    flex: 1 1 68%;
+    min-width: 0;
+    border-bottom: none;
+    border-right: 1px solid #1f2937;
+    padding: 36px 28px;
+  }
+  .workspace-aside {
+    flex: 1 1 32%;
+    min-width: 0;
+    padding: 36px 28px;
+  }
+}
+
+/* --- Workspace article cards: hover lift + sibling dim (fine pointer only) --- */
+.workspace-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  isolation: isolate;
+  padding: 2px 0;
+}
+
+.workspace-card {
+  display: block;
+  position: relative;
+  z-index: 1;
+  background: #0f172a;
+  border: 1px solid #1f2937;
+  border-radius: 10px;
+  padding: 12px 14px;
+  text-decoration: none;
+  transform-origin: center;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease,
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .workspace-card-list:hover .workspace-card {
+    opacity: 0.85;
+  }
+  .workspace-card-list .workspace-card:hover {
+    opacity: 1;
+    z-index: 2;
+    transform: scale(1.04);
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
+    border-color: #4b5563;
+    background: #111827;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-card {
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+  }
+  .workspace-card-list:hover .workspace-card,
+  .workspace-card-list .workspace-card:hover {
+    transform: none;
+  }
+}
+
+/* --- Trading dashboard: constrain width on narrow viewports --- */
+.trading-dashboard-root {
+  overflow-x: hidden;
+  min-width: 0;
+  box-sizing: border-box;
 }

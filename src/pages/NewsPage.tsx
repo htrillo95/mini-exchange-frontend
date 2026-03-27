@@ -59,17 +59,13 @@ export default function NewsPage() {
   }, []);
 
   return (
-    <div style={{ minHeight: "100dvh", background: "#0b0f1a", color: "#e5e7eb" }}>
-      <div style={{ display: "flex", maxWidth: 1320, margin: "0 auto", minHeight: "100dvh" }}>
-        <div
-          style={{
-            width: "68%",
-            borderRight: "1px solid #1f2937",
-            overflowY: "auto",
-            padding: "36px 28px",
-          }}
-        >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16 }}>
+    <div
+      className="page-enter workspace-page"
+      style={{ minHeight: "100dvh", background: "#0b0f1a", color: "#e5e7eb", width: "100%", maxWidth: "100%", minWidth: 0 }}
+    >
+      <div className="workspace-shell">
+        <main className="workspace-main">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
           <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: "#f9fafb" }}>Market News</h1>
           <div style={{ fontSize: 12, color: "#6b7280" }}>
             Updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : "—"}
@@ -83,30 +79,14 @@ export default function NewsPage() {
         )}
 
         {!loading && !error && articles.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="workspace-card-list">
             {articles.map((article, idx) => (
               <a
                 key={String(article.id ?? idx)}
                 href={article.url}
                 target="_blank"
                 rel="noreferrer"
-                style={{
-                  display: "block",
-                  background: "#0f172a",
-                  border: "1px solid #1f2937",
-                  borderRadius: 10,
-                  padding: "12px 14px",
-                  textDecoration: "none",
-                  transition: "all 0.2s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = "#4b5563";
-                  e.currentTarget.style.background = "#111827";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = "#1f2937";
-                  e.currentTarget.style.background = "#0f172a";
-                }}
+                className="workspace-card"
               >
                 <div style={{ color: "#e5e7eb", fontWeight: 500, lineHeight: 1.4, fontSize: 16 }}>
                   {article.headline || article.title || "Untitled"}
@@ -119,9 +99,9 @@ export default function NewsPage() {
             ))}
           </div>
         )}
-      </div>
+      </main>
 
-      <div style={{ width: "32%", padding: "36px 28px" }}>
+      <aside className="workspace-aside">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
           <span
             style={{
@@ -137,7 +117,7 @@ export default function NewsPage() {
           >
             Workspace / News
           </span>
-          <Link to="/" style={{ color: "#9ca3af", textDecoration: "none", fontSize: 13 }}>
+          <Link to="/" className="nav-link-animated nav-link-animated--muted">
             Home
           </Link>
         </div>
@@ -173,7 +153,7 @@ export default function NewsPage() {
         <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.7 }}>
           This project explores how trading systems behave through real-time interaction.
         </p>
-      </div>
+      </aside>
       </div>
       <style>{`
         @keyframes status-pulse {

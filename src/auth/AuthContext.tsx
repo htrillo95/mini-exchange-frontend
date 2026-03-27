@@ -29,12 +29,22 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+/** Persisted so demo-token sessions (503 fallback) still show the signed-in email after reload. */
+const USER_EMAIL_STORAGE_KEY = "auth:userEmail";
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const [token, setToken] = useState<string | null>(() => {
     return localStorage.getItem("token");
   });
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    const t = localStorage.getItem("token");
+    if (t === "demo-token") {
+      const e = localStorage.getItem(USER_EMAIL_STORAGE_KEY);
+      if (e) return { email: e };
+    }
+    return null;
+  });
   const [loading, setLoading] = useState(true);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
@@ -44,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setUser(null);
     localStorage.removeItem("token");
+    localStorage.removeItem(USER_EMAIL_STORAGE_KEY);
     setSessionNotice("Session expired. Please sign in again.");
   }, []);
 
@@ -84,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         if (data?.user?.email) {
+          localStorage.setItem(USER_EMAIL_STORAGE_KEY, data.user.email);
           setUser({ email: data.user.email });
         }
       } else if (res.status === 401) {
@@ -128,9 +140,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (res.status === 503) {
         console.log("FALLBACK TO DEMO MODE");
+        const fallbackEmail = email || "demo@local";
         localStorage.setItem("token", "demo-token");
+        localStorage.setItem(USER_EMAIL_STORAGE_KEY, fallbackEmail);
         setToken("demo-token");
-        setUser({ email: email || "demo@local" });
+        setUser({ email: fallbackEmail });
         navigate("/app");
         return false;
       }
@@ -159,6 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data?.token) {
         setToken(data.token);
         const userEmail = data?.user?.email || email;
+        localStorage.setItem(USER_EMAIL_STORAGE_KEY, userEmail);
         setUser({ email: userEmail });
         return true;
       }
@@ -227,6 +242,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setUser(null);
     localStorage.removeItem("token");
+    localStorage.removeItem(USER_EMAIL_STORAGE_KEY);
   };
 
   return (

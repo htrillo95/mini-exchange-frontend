@@ -25,6 +25,7 @@ export default function GuestHome() {
 
   return (
     <div
+      className="page-enter"
       style={{
         minHeight: "100dvh",
         background: "#0b0f17",
@@ -35,6 +36,10 @@ export default function GuestHome() {
         justifyContent: "center",
         padding: "20px",
         textAlign: "center",
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
       }}
     >
       {logoutToast && (
@@ -113,7 +118,7 @@ export default function GuestHome() {
                   setMarketView("live");
                   navigate("/app");
                 }}
-                className="btn-primary"
+                className="btn-primary home-cta home-cta--primary"
                 style={{
                   padding: "12px 24px",
                   fontSize: 16,
@@ -128,7 +133,7 @@ export default function GuestHome() {
                   setMarketView("demo");
                   navigate("/app");
                 }}
-                className="btn-secondary"
+                className="btn-secondary home-cta home-cta--secondary"
                 style={{
                   padding: "12px 24px",
                   fontSize: 16,
@@ -172,7 +177,7 @@ export default function GuestHome() {
           )}
         </div>
         <div style={{ marginTop: 12 }}>
-          <Link to="/news" style={{ color: "#93c5fd", textDecoration: "none", fontSize: 13 }}>
+          <Link to="/news" className="nav-link-animated">
             Open Workspace
           </Link>
         </div>

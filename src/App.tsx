@@ -11,7 +11,7 @@ import AboutPage from "./pages/AboutPage";
 
 export default function App() {
   return (
-    <>
+    <div className="app-root">
       <ToastHost />
       <Routes>
         <Route path="/" element={<GuestHome />} />
@@ -35,7 +35,7 @@ export default function App() {
           }
         />
       </Routes>
-    </>
+    </div>
   );
 }
 
