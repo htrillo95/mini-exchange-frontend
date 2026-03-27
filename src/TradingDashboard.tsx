@@ -72,56 +72,56 @@ function StatusChip({ status }: { status: OrderStatus }) {
   );
 }
 
-/** Candlestick chart: fetches OHLC from /api/market/candles and renders with lightweight-charts */
+const CHART_OPTIONS = {
+  layout: {
+    background: { type: ColorType.Solid as const, color: "#0f172a" },
+    textColor: "#9ca3af",
+  },
+  grid: { vertLines: { color: "#111827" }, horzLines: { color: "#111827" } },
+  crosshair: { mode: 1 as const },
+  handleScroll: { mouseWheel: true, pressedMouseMove: true },
+  handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+  rightPriceScale: { borderColor: "#1f2937", visible: true },
+  leftPriceScale: { visible: false },
+  timeScale: {
+    rightOffset: 10,
+    barSpacing: 6,
+    lockVisibleTimeRangeOnResize: true,
+    borderColor: "#1f2937",
+    timeVisible: true,
+    secondsVisible: true,
+  },
+};
+
+/** Candlestick chart: two stacked panels (price + volume), synced time scale, incremental updates, volume tooltip */
 function CandlestickChart() {
-  const chartContainerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const priceContainerRef = useRef<HTMLDivElement>(null);
+  const volumeContainerRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const priceChartRef = useRef<ReturnType<typeof createChart> | null>(null);
+  const volumeChartRef = useRef<ReturnType<typeof createChart> | null>(null);
+  const volumeByTimeRef = useRef<Map<number, number>>(new Map());
+  const initializedRef = useRef(false);
+  const syncingRef = useRef(false);
 
   useEffect(() => {
-    if (!chartContainerRef.current) return;
+    if (!priceContainerRef.current || !volumeContainerRef.current || !wrapperRef.current) return;
 
-    const chart = createChart(chartContainerRef.current, {
-      width: chartContainerRef.current.clientWidth,
-      height: 360,
-      layout: {
-        background: { type: ColorType.Solid, color: "#0f172a" },
-        textColor: "#9ca3af",
-      },
-      grid: {
-        vertLines: { color: "#111827" },
-        horzLines: { color: "#111827" },
-      },
-      crosshair: {
-        mode: 1,
-      },
-      handleScroll: {
-        mouseWheel: true,
-        pressedMouseMove: true,
-      },
-      handleScale: {
-        axisPressedMouseMove: true,
-        mouseWheel: true,
-        pinch: true,
-      },
-      rightPriceScale: {
-        borderColor: "#1f2937",
-        visible: true,
-      },
-      leftPriceScale: {
-        visible: false,
-      },
-      timeScale: {
-        rightOffset: 10,
-        barSpacing: 6,
-        fixLeftEdge: true,
-        lockVisibleTimeRangeOnResize: true,
-        borderColor: "#1f2937",
-        timeVisible: true,
-        secondsVisible: true,
-      },
+    const width = wrapperRef.current.clientWidth;
+    const priceChart = createChart(priceContainerRef.current, {
+      ...CHART_OPTIONS,
+      width,
+      height: 320,
+    });
+    const volumeChart = createChart(volumeContainerRef.current, {
+      ...CHART_OPTIONS,
+      width,
+      height: 120,
+      watermark: { visible: false },
     });
 
-    const candleSeries = chart.addCandlestickSeries({
+    const candleSeries = priceChart.addCandlestickSeries({
       upColor: "#22c55e",
       downColor: "#ef4444",
       borderVisible: false,
@@ -131,24 +131,62 @@ function CandlestickChart() {
       lastValueVisible: true,
     });
 
-    const volumeSeries = chart.addHistogramSeries({
-      priceFormat: {
-        type: "volume",
-      },
+    const volumeSeries = volumeChart.addHistogramSeries({
+      priceFormat: { type: "volume" },
       priceScaleId: "volume",
     });
-    chart.priceScale("volume").applyOptions({
+    volumeChart.priceScale("volume").applyOptions({
       scaleMargins: { top: 0.75, bottom: 0 },
     });
 
-    chartRef.current = chart;
+    priceChartRef.current = priceChart;
+    volumeChartRef.current = volumeChart;
+
+    function syncPriceToVolume() {
+      if (syncingRef.current) return;
+      const range = priceChart.timeScale().getVisibleLogicalRange();
+      if (range) {
+        syncingRef.current = true;
+        volumeChart.timeScale().setVisibleLogicalRange(range);
+        syncingRef.current = false;
+      }
+    }
+    function syncVolumeToPrice() {
+      if (syncingRef.current) return;
+      const range = volumeChart.timeScale().getVisibleLogicalRange();
+      if (range) {
+        syncingRef.current = true;
+        priceChart.timeScale().setVisibleLogicalRange(range);
+        syncingRef.current = false;
+      }
+    }
+    priceChart.timeScale().subscribeVisibleLogicalRangeChange(syncPriceToVolume);
+    volumeChart.timeScale().subscribeVisibleLogicalRangeChange(syncVolumeToPrice);
+
+    if (tooltipRef.current) {
+      const tooltipEl = tooltipRef.current;
+      priceChart.subscribeCrosshairMove((param) => {
+        if (!param.time) {
+          tooltipEl.style.display = "none";
+          return;
+        }
+        const t = param.time as number;
+        const vol = volumeByTimeRef.current.get(t);
+        if (vol !== undefined) {
+          tooltipEl.style.display = "block";
+          tooltipEl.textContent = `Volume: ${vol}`;
+        } else {
+          tooltipEl.style.display = "none";
+        }
+      });
+    }
 
     async function loadCandles() {
       try {
         const res = await fetch(`${API_BASE_URL}/api/market/candles?interval=5`);
         if (!res.ok) return;
         const data = await res.json();
-        if (!Array.isArray(data) || !chartRef.current) return;
+        if (!Array.isArray(data) || !priceChartRef.current || !volumeChartRef.current) return;
         const normalized = data.map(
           (c: { time: number; open: number; high: number; low: number; close: number; volume?: number }) => ({
             time: c.time as UTCTimestamp,
@@ -156,14 +194,40 @@ function CandlestickChart() {
             high: c.high,
             low: c.low,
             close: c.close,
-            volume: c.volume,
+            volume: c.volume ?? 1,
           })
         );
-        candleSeries.setData(
-          normalized.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }))
-        );
-        volumeSeries.setData(normalized.map((c) => ({ time: c.time, value: c.volume ?? 1 })));
-        chart.timeScale().scrollToPosition(5, false);
+
+        normalized.sort((a, b) => Number(a.time) - Number(b.time));
+        if (normalized.length === 0) return;
+
+        const candles = normalized.map((c) => ({ 
+          time: c.time, 
+          open: c.open, 
+          high: c.high, 
+          low: c.low, 
+          close: c.close }));
+        const volumes = normalized.map((c) => ({ 
+          time: c.time, 
+          value: c.volume }));
+
+        normalized.forEach((c) => volumeByTimeRef.current.set(c.time as number, c.volume));
+
+        if (!initializedRef.current) {
+          candleSeries.setData(candles);
+          volumeSeries.setData(volumes);
+
+          priceChart.timeScale().fitContent();
+
+          syncPriceToVolume();
+
+          initializedRef.current = true;
+        } else {
+          const last = normalized[normalized.length - 1];
+          
+          candleSeries.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close });
+          volumeSeries.update({ time: last.time, value: last.volume });
+        }
       } catch (e) {
         console.error("[CandlestickChart] loadCandles failed", e);
       }
@@ -173,20 +237,49 @@ function CandlestickChart() {
     const interval = setInterval(loadCandles, 3000);
 
     const resizeObserver = new ResizeObserver(() => {
-      if (!chartRef.current || !chartContainerRef.current) return;
-      chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+      if (!wrapperRef.current || !priceChartRef.current || !volumeChartRef.current) return;
+      const w = wrapperRef.current.clientWidth;
+      priceChartRef.current.applyOptions({ width: w });
+      volumeChartRef.current.applyOptions({ width: w });
     });
-    resizeObserver.observe(chartContainerRef.current);
+    resizeObserver.observe(wrapperRef.current);
 
     return () => {
       clearInterval(interval);
       resizeObserver.disconnect();
-      chart.remove();
-      chartRef.current = null;
+      priceChart.remove();
+      volumeChart.remove();
+      priceChartRef.current = null;
+      volumeChartRef.current = null;
+      initializedRef.current = false;
     };
   }, []);
 
-  return <div ref={chartContainerRef} style={{ width: "100%", height: 360 }} />;
+  return (
+    <div ref={wrapperRef} style={{ width: "100%", position: "relative" }}>
+      <div style={{ position: "relative" }}>
+        <div id="price-chart" ref={priceContainerRef} style={{ width: "100%", height: 320 }} />
+        <div
+          ref={tooltipRef}
+          style={{
+            display: "none",
+            position: "absolute",
+            bottom: 8,
+            left: 8,
+            background: "#111827",
+            border: "1px solid #1f2937",
+            borderRadius: 4,
+            padding: "4px 8px",
+            fontSize: 12,
+            color: "#9ca3af",
+            fontFamily: "monospace",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+      <div id="volume-chart" ref={volumeContainerRef} style={{ width: "100%", height: 120 }} />
+    </div>
+  );
 }
 
 // Props interface for view components
