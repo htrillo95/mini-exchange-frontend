@@ -2,12 +2,14 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import Toast from "../components/Toast";
 import { useAuth } from "../auth/AuthContext";
+import { useMarketMode } from "../market/MarketModeContext";
 
 export default function GuestHome() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [logoutToast, setLogoutToast] = useState(false);
   const { isAuthed } = useAuth();
+  const { setMarketView } = useMarketMode();
 
   // Show logout success message if coming from logout
   useEffect(() => {
@@ -107,7 +109,10 @@ export default function GuestHome() {
           {isAuthed ? (
             <>
               <button
-                onClick={() => navigate("/app")}
+                onClick={() => {
+                  setMarketView("live");
+                  navigate("/app");
+                }}
                 className="btn-primary"
                 style={{
                   padding: "12px 24px",
@@ -116,10 +121,13 @@ export default function GuestHome() {
                   width: "100%",
                 }}
               >
-                Return to Exchange
+                Live Market
               </button>
               <button
-                onClick={() => navigate("/demo")}
+                onClick={() => {
+                  setMarketView("demo");
+                  navigate("/app");
+                }}
                 className="btn-secondary"
                 style={{
                   padding: "12px 24px",
@@ -128,13 +136,16 @@ export default function GuestHome() {
                   width: "100%",
                 }}
               >
-                Open Demo Market
+                Demo Market
               </button>
             </>
           ) : (
             <>
               <button
-                onClick={() => navigate("/demo")}
+                onClick={() => {
+                  setMarketView("demo");
+                  navigate("/demo");
+                }}
                 className="btn-primary"
                 style={{
                   padding: "12px 24px",

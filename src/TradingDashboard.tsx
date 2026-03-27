@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { createChart, ColorType, UTCTimestamp } from "lightweight-charts";
 import { useAuth } from "./auth/AuthContext";
+import { useMarketMode, type SimulationSpeed } from "./market/MarketModeContext";
 import ConfirmModal from "./components/ConfirmModal";
 import useSmartPolling from "./hooks/useSmartPolling";
 import useMarketWebSocket from "./hooks/useMarketWebSocket";
@@ -29,6 +30,238 @@ type Trade = {
   quantity: number;
   createdAt?: string;
 };
+
+type PaperState = {
+  balance: number;
+  realizedPnL: number;
+  positionQty: number;
+  avgCost: number;
+};
+
+const PAPER_DEFAULT: PaperState = {
+  balance: 10000,
+  realizedPnL: 0,
+  positionQty: 0,
+  avgCost: 0,
+};
+
+function loadPaperState(key: string | null): PaperState {
+  if (!key) return { ...PAPER_DEFAULT };
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return { ...PAPER_DEFAULT };
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    const realizedPnL =
+      typeof p.realizedPnL === "number"
+        ? p.realizedPnL
+        : typeof p.pnl === "number"
+          ? p.pnl
+          : PAPER_DEFAULT.realizedPnL;
+    const positionQty =
+      typeof p.positionQty === "number"
+        ? p.positionQty
+        : typeof p.position === "number"
+          ? p.position
+          : PAPER_DEFAULT.positionQty;
+    return {
+      balance: typeof p.balance === "number" ? p.balance : PAPER_DEFAULT.balance,
+      realizedPnL,
+      positionQty,
+      avgCost: typeof p.avgCost === "number" ? p.avgCost : PAPER_DEFAULT.avgCost,
+    };
+  } catch {
+    return { ...PAPER_DEFAULT };
+  }
+}
+
+function savePaperState(key: string | null, state: PaperState) {
+  if (!key) return;
+  try {
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        ...state,
+        pnl: state.realizedPnL,
+        position: state.positionQty,
+      })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Update paper portfolio after a demo order response (best-effort immediate fills). */
+function applyPaperAfterDemoOrder(
+  form: { type: "buy" | "sell"; price: string; quantity: string },
+  orderData: unknown,
+  prev: PaperState
+): PaperState {
+  const price = Number(form.price);
+  const quantity = Number(form.quantity);
+  if (!Number.isFinite(price) || !Number.isFinite(quantity) || quantity <= 0) return prev;
+
+  const notional = price * quantity;
+  const od = orderData as Record<string, unknown> | null | undefined;
+  const inner = (od?.order ?? od) as Record<string, unknown> | undefined;
+  const status = inner && typeof inner.status === "string" ? inner.status : "";
+  if (status === "OPEN" || status === "CANCELED") return prev;
+
+  let { balance, realizedPnL, positionQty, avgCost } = prev;
+
+  if (form.type === "buy") {
+    if (balance < notional) return prev;
+    const newQty = positionQty + quantity;
+    avgCost = newQty > 0 ? (avgCost * positionQty + price * quantity) / newQty : 0;
+    positionQty = newQty;
+    balance -= notional;
+  } else {
+    if (positionQty < quantity) return prev;
+    const closeQty = Math.min(quantity, positionQty);
+    realizedPnL += (price - avgCost) * closeQty;
+    balance += notional;
+    positionQty -= quantity;
+    if (positionQty <= 0) {
+      positionQty = 0;
+      avgCost = 0;
+    }
+  }
+
+  return { balance, realizedPnL, positionQty, avgCost };
+}
+
+type DevSettingsPanelProps = {
+  simulationEnabled: boolean;
+  onToggleSimulation: (checked: boolean) => void;
+  simulationStarting: boolean;
+  simulationStopping: boolean;
+  simulationSpeed: SimulationSpeed;
+  setSimulationSpeed: (s: SimulationSpeed) => void;
+};
+
+/** Authenticated only: simulation + speed (placed below ticker card). */
+function DevSettingsPanel({
+  simulationEnabled,
+  onToggleSimulation,
+  simulationStarting,
+  simulationStopping,
+  simulationSpeed,
+  setSimulationSpeed,
+}: DevSettingsPanelProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, []);
+
+  const busy = simulationStarting || simulationStopping;
+
+  return (
+    <div ref={ref} style={{ position: "relative", marginBottom: 10 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          fontSize: 11,
+          fontWeight: 500,
+          color: "#525d6f",
+          background: "transparent",
+          border: "none",
+          padding: "2px 0",
+          cursor: "pointer",
+          letterSpacing: 0.2,
+        }}
+      >
+        Dev Settings <span style={{ opacity: 0.65 }}>▾</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: 6,
+            zIndex: 50,
+            minWidth: 200,
+            padding: "10px 12px",
+            background: "#0f172a",
+            border: "1px solid #1f2937",
+            borderRadius: 6,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+          }}
+        >
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: 12,
+              color: "#9ca3af",
+              cursor: busy ? "not-allowed" : "pointer",
+              marginBottom: 10,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={simulationEnabled}
+              onChange={(e) => onToggleSimulation(e.target.checked)}
+              disabled={busy}
+              style={{ cursor: busy ? "not-allowed" : "pointer" }}
+            />
+            <span>Simulate Market</span>
+            {simulationStarting && <span style={{ fontSize: 10, color: "#6b7280" }}>Starting…</span>}
+            {simulationStopping && <span style={{ fontSize: 10, color: "#6b7280" }}>Stopping…</span>}
+          </label>
+          <div style={{ fontSize: 10, color: "#525d6f", textTransform: "uppercase", marginBottom: 6 }}>Speed</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setSimulationSpeed("fast");
+                setOpen(false);
+              }}
+              style={{
+                flex: 1,
+                padding: "6px 8px",
+                fontSize: 12,
+                borderRadius: 4,
+                border: `1px solid ${simulationSpeed === "fast" ? "#3b82f6" : "#374151"}`,
+                background: simulationSpeed === "fast" ? "#1e3a5f" : "transparent",
+                color: simulationSpeed === "fast" ? "#93c5fd" : "#9ca3af",
+                cursor: "pointer",
+              }}
+            >
+              Fast
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSimulationSpeed("normal");
+                setOpen(false);
+              }}
+              style={{
+                flex: 1,
+                padding: "6px 8px",
+                fontSize: 12,
+                borderRadius: 4,
+                border: `1px solid ${simulationSpeed === "normal" ? "#3b82f6" : "#374151"}`,
+                background: simulationSpeed === "normal" ? "#1e3a5f" : "transparent",
+                color: simulationSpeed === "normal" ? "#93c5fd" : "#9ca3af",
+                cursor: "pointer",
+              }}
+            >
+              Normal
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** True when fetch failed at the network layer (offline, CORS, wrong host), not HTTP 4xx/5xx. */
 function isBrowserNetworkError(e: unknown): boolean {
@@ -377,6 +610,16 @@ interface ViewProps {
   balance?: number | null;
   positions?: { symbol: string; quantity: number; avgPrice: number }[];
   currentPrice?: number | null;
+  /** Live market + signed in: show account, positions, orders, history. */
+  tradingEnabled: boolean;
+  /** Live (API) account: false until first fetch settles. */
+  liveAccountReady?: boolean;
+  devSimulation?: {
+    enabled: boolean;
+    onToggle: (checked: boolean) => void;
+    starting: boolean;
+    stopping: boolean;
+  };
 }
 
 function GuestView(props: ViewProps) {
@@ -397,6 +640,7 @@ function GuestView(props: ViewProps) {
     HistoryPanel,
     showOrderForm,
     onSignInClick,
+    tradingEnabled,
   } = props;
 
   return (
@@ -463,6 +707,10 @@ function GuestView(props: ViewProps) {
           </div>
         </div>
       </div>
+
+      <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+        Login to start trading and track a simulated account.
+      </p>
 
       {/* Candlestick Chart */}
       <div
@@ -670,23 +918,25 @@ function GuestView(props: ViewProps) {
         >
           Trades
         </button>
-        <button
-          type="button"
-          onClick={() => setMobileTab("history")}
-          className="tab-button"
-          style={{
-            flex: 1,
-            padding: "8px 10px",
-            fontSize: 13,
-            border: "1px solid",
-            borderColor: mobileTab === "history" ? "#3b82f6" : "#374151",
-            background: mobileTab === "history" ? "#1f2937" : "#111827",
-            color: mobileTab === "history" ? "#e5e7eb" : "#9ca3af",
-            cursor: "pointer",
-          }}
-        >
-          Order History
-        </button>
+        {tradingEnabled && (
+          <button
+            type="button"
+            onClick={() => setMobileTab("history")}
+            className="tab-button"
+            style={{
+              flex: 1,
+              padding: "8px 10px",
+              fontSize: 13,
+              border: "1px solid",
+              borderColor: mobileTab === "history" ? "#3b82f6" : "#374151",
+              background: mobileTab === "history" ? "#1f2937" : "#111827",
+              color: mobileTab === "history" ? "#e5e7eb" : "#9ca3af",
+              cursor: "pointer",
+            }}
+          >
+            Order History
+          </button>
+        )}
       </div>
 
       {/* Main Layout: Desktop (2x2 grid) vs Mobile (single panel) */}
@@ -695,7 +945,7 @@ function GuestView(props: ViewProps) {
         <div className="main-grid-mobile" style={{ width: "100%" }}>
           {mobileTab === "book" && <OrderBookPanel />}
           {mobileTab === "trades" && <TradesPanel />}
-          {mobileTab === "history" && <HistoryPanel />}
+          {tradingEnabled && mobileTab === "history" && <HistoryPanel />}
         </div>
       ) : (
         /* Desktop: 2x2 grid layout with all panels visible */
@@ -704,7 +954,7 @@ function GuestView(props: ViewProps) {
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-            gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)",
+            gridTemplateRows: tradingEnabled ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)",
             gap: 12,
             minHeight: 0,
             minWidth: 0,
@@ -714,7 +964,7 @@ function GuestView(props: ViewProps) {
           }}
         >
           <OrderBookPanel />
-          <HistoryPanel />
+          {tradingEnabled && <HistoryPanel />}
           <TradesPanel />
         </div>
       )}
@@ -741,7 +991,12 @@ function AuthedView(props: ViewProps) {
     balance,
     positions = [],
     currentPrice,
+    tradingEnabled,
+    liveAccountReady,
+    devSimulation,
   } = props;
+
+  const { marketView, simulationSpeed, setSimulationSpeed } = useMarketMode();
 
   return (
     <>
@@ -752,14 +1007,14 @@ function AuthedView(props: ViewProps) {
           border: "1px solid #1f2937",
           borderRadius: 6,
           padding: "8px 12px",
-          marginBottom: 10,
+          marginBottom: 0,
           display: "flex",
           alignItems: "center",
           gap: 16,
           flexWrap: "wrap",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb" }}>$DEMO</span>
           <span
             style={{
@@ -771,7 +1026,7 @@ function AuthedView(props: ViewProps) {
               fontWeight: 600,
             }}
           >
-            SIMULATED
+            {tradingEnabled ? "LIVE" : "VIEW ONLY"}
           </span>
         </div>
 
@@ -807,6 +1062,17 @@ function AuthedView(props: ViewProps) {
           </div>
         </div>
       </div>
+
+      {devSimulation && (
+        <DevSettingsPanel
+          simulationEnabled={devSimulation.enabled}
+          onToggleSimulation={devSimulation.onToggle}
+          simulationStarting={devSimulation.starting}
+          simulationStopping={devSimulation.stopping}
+          simulationSpeed={simulationSpeed}
+          setSimulationSpeed={setSimulationSpeed}
+        />
+      )}
 
       {/* Candlestick Chart */}
       <div
@@ -880,23 +1146,95 @@ function AuthedView(props: ViewProps) {
         </div>
       )}
 
-      {/* Account balance (logged-in only) */}
-      <div
-        style={{
-          background: "#111827",
-          border: "1px solid #1f2937",
-          borderRadius: 6,
-          padding: "10px 12px",
-          marginBottom: 10,
-        }}
-      >
-        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>Account</div>
-        <div style={{ fontSize: 16, fontWeight: 600, color: "#e5e7eb", fontFamily: "monospace" }}>
-          Balance: {balance != null ? `$${balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
-        </div>
-      </div>
+      {tradingEnabled && (
+        <>
+          <div
+            style={{
+              background: "#111827",
+              border: "1px solid #1f2937",
+              borderRadius: 6,
+              padding: "10px 12px",
+              marginBottom: 10,
+            }}
+          >
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>Account</div>
+            {liveAccountReady === false ? (
+              <div style={{ fontSize: 14, color: "#6b7280" }}>Loading account…</div>
+            ) : (
+              <div style={{ fontSize: 16, fontWeight: 600, color: "#e5e7eb", fontFamily: "monospace" }}>
+                Balance: $
+                {(balance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            )}
+          </div>
 
-      {/* Positions (logged-in only) */}
+          <div
+            style={{
+              background: "#111827",
+              border: "1px solid #1f2937",
+              borderRadius: 6,
+              padding: "10px 12px",
+              marginBottom: 10,
+            }}
+          >
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Positions</div>
+            {positions.length === 0 ? (
+              <div style={{ fontSize: 13, color: "#9ca3af" }}>No open positions</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "monospace" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #1f2937", color: "#6b7280", fontSize: 11 }}>
+                      <th style={{ textAlign: "left", padding: "4px 8px 4px 0" }}>Symbol</th>
+                      <th style={{ textAlign: "right", padding: "4px 8px" }}>Qty</th>
+                      <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>Avg Price</th>
+                      <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>Price</th>
+                      <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>PNL</th>
+                    </tr>
+                  </thead>
+                  <tbody style={{ color: "#e5e7eb" }}>
+                    {positions.map((p, i) => {
+                      const hasPrice = currentPrice != null;
+                      const pnl = hasPrice ? (currentPrice! - p.avgPrice) * p.quantity : 0;
+                      const pnlColor = pnl >= 0 ? "#22c55e" : "#ef4444";
+                      return (
+                        <tr
+                          key={`${p.symbol}-${i}`}
+                          style={{ borderBottom: i < positions.length - 1 ? "1px solid #1f2937" : undefined }}
+                        >
+                          <td style={{ padding: "6px 8px 6px 0", fontWeight: 600 }}>{p.symbol}</td>
+                          <td style={{ textAlign: "right", padding: "6px 8px" }}>{p.quantity}</td>
+                          <td style={{ textAlign: "right", padding: "6px 0 6px 8px" }}>
+                            ${p.avgPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          <td style={{ textAlign: "right", padding: "6px 0 6px 8px" }}>
+                            {hasPrice
+                              ? `$${currentPrice!.toLocaleString("en-US", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}`
+                              : "—"}
+                          </td>
+                          <td style={{ textAlign: "right", padding: "6px 0 6px 8px", color: hasPrice ? pnlColor : "#9ca3af" }}>
+                            {hasPrice
+                              ? `${pnl >= 0 ? "" : "-"}$${Math.abs(pnl).toLocaleString("en-US", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}`
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Order Form - Compact Ticket (live + signed in only) */}
       <div
         style={{
           background: "#111827",
@@ -906,122 +1244,64 @@ function AuthedView(props: ViewProps) {
           marginBottom: 10,
         }}
       >
-        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Positions</div>
-        {positions.length === 0 ? (
-          <div style={{ fontSize: 13, color: "#9ca3af" }}>No open positions</div>
+        {tradingEnabled ? (
+          <form
+            onSubmit={submitOrder}
+            style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <select
+              value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value as "buy" | "sell" })}
+              className="input-terminal"
+              style={{ minWidth: 80 }}
+            >
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+
+            <input
+              type="number"
+              placeholder="Price"
+              value={form.price}
+              onChange={(e) => setForm({ ...form, price: e.target.value })}
+              className="input-terminal"
+              required
+              min={0}
+              step="0.01"
+              style={{ width: 120 }}
+            />
+
+            <input
+              type="number"
+              placeholder="Quantity"
+              value={form.quantity}
+              onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+              className="input-terminal"
+              required
+              min={1}
+              style={{ width: 120 }}
+            />
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary"
+              style={{ minWidth: 120 }}
+            >
+              {loading ? "Working..." : "Submit Order"}
+            </button>
+          </form>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "monospace" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #1f2937", color: "#6b7280", fontSize: 11 }}>
-                  <th style={{ textAlign: "left", padding: "4px 8px 4px 0" }}>Symbol</th>
-                  <th style={{ textAlign: "right", padding: "4px 8px" }}>Qty</th>
-                  <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>Avg Price</th>
-                  <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>Price</th>
-                  <th style={{ textAlign: "right", padding: "4px 0 4px 8px" }}>PNL</th>
-                </tr>
-              </thead>
-              <tbody style={{ color: "#e5e7eb" }}>
-                {positions.map((p, i) => {
-                  const hasPrice = currentPrice != null;
-                  const pnl = hasPrice ? (currentPrice! - p.avgPrice) * p.quantity : 0;
-                  const pnlColor = pnl >= 0 ? "#22c55e" : "#ef4444";
-                  return (
-                    <tr
-                      key={`${p.symbol}-${i}`}
-                      style={{ borderBottom: i < positions.length - 1 ? "1px solid #1f2937" : undefined }}
-                    >
-                      <td style={{ padding: "6px 8px 6px 0", fontWeight: 600 }}>{p.symbol}</td>
-                      <td style={{ textAlign: "right", padding: "6px 8px" }}>{p.quantity}</td>
-                      <td style={{ textAlign: "right", padding: "6px 0 6px 8px" }}>
-                        ${p.avgPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td style={{ textAlign: "right", padding: "6px 0 6px 8px" }}>
-                        {hasPrice
-                          ? `$${currentPrice!.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}`
-                          : "—"}
-                      </td>
-                      <td style={{ textAlign: "right", padding: "6px 0 6px 8px", color: hasPrice ? pnlColor : "#9ca3af" }}>
-                        {hasPrice
-                          ? `${pnl >= 0 ? "" : "-"}$${Math.abs(pnl).toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}`
-                          : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div style={{ fontSize: 13, color: "#9ca3af", lineHeight: 1.5 }}>
+            <strong style={{ color: "#e5e7eb" }}>View-only.</strong> Open <strong>Live Market</strong> from Home to
+            place orders and manage your account.
           </div>
         )}
-      </div>
-
-      {/* Order Form - Compact Ticket */}
-      <div
-        style={{
-          background: "#111827",
-          border: "1px solid #1f2937",
-          borderRadius: 6,
-          padding: "10px 12px",
-          marginBottom: 10,
-        }}
-      >
-        <form
-          onSubmit={submitOrder}
-          style={{
-            display: "flex",
-            gap: 10,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <select
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value as "buy" | "sell" })}
-            className="input-terminal"
-            style={{ minWidth: 80 }}
-          >
-            <option value="buy">Buy</option>
-            <option value="sell">Sell</option>
-          </select>
-
-          <input
-            type="number"
-            placeholder="Price"
-            value={form.price}
-            onChange={(e) => setForm({ ...form, price: e.target.value })}
-            className="input-terminal"
-            required
-            min={0}
-            step="0.01"
-            style={{ width: 120 }}
-          />
-
-          <input
-            type="number"
-            placeholder="Quantity"
-            value={form.quantity}
-            onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-            className="input-terminal"
-            required
-            min={1}
-            style={{ width: 120 }}
-          />
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-primary"
-            style={{ minWidth: 120 }}
-          >
-            {loading ? "Working..." : "Submit Order"}
-          </button>
-        </form>
       </div>
 
       {/* 
@@ -1066,23 +1346,25 @@ function AuthedView(props: ViewProps) {
         >
           Trades
         </button>
-        <button
-          type="button"
-          onClick={() => setMobileTab("history")}
-          className="tab-button"
-          style={{
-            flex: 1,
-            padding: "8px 10px",
-            fontSize: 13,
-            border: "1px solid",
-            borderColor: mobileTab === "history" ? "#3b82f6" : "#374151",
-            background: mobileTab === "history" ? "#1f2937" : "#111827",
-            color: mobileTab === "history" ? "#e5e7eb" : "#9ca3af",
-            cursor: "pointer",
-          }}
-        >
-          Order History
-        </button>
+        {tradingEnabled && (
+          <button
+            type="button"
+            onClick={() => setMobileTab("history")}
+            className="tab-button"
+            style={{
+              flex: 1,
+              padding: "8px 10px",
+              fontSize: 13,
+              border: "1px solid",
+              borderColor: mobileTab === "history" ? "#3b82f6" : "#374151",
+              background: mobileTab === "history" ? "#1f2937" : "#111827",
+              color: mobileTab === "history" ? "#e5e7eb" : "#9ca3af",
+              cursor: "pointer",
+            }}
+          >
+            Order History
+          </button>
+        )}
       </div>
 
       {/* Main Layout: Desktop (2x2 grid) vs Mobile (single panel) */}
@@ -1091,7 +1373,7 @@ function AuthedView(props: ViewProps) {
         <div className="main-grid-mobile" style={{ width: "100%" }}>
           {mobileTab === "book" && <OrderBookPanel />}
           {mobileTab === "trades" && <TradesPanel />}
-          {mobileTab === "history" && <HistoryPanel />}
+          {tradingEnabled && mobileTab === "history" && <HistoryPanel />}
         </div>
       ) : (
         /* Desktop: 2x2 grid layout with all panels visible */
@@ -1100,7 +1382,7 @@ function AuthedView(props: ViewProps) {
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-            gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)",
+            gridTemplateRows: tradingEnabled ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)",
             gap: 12,
             minHeight: 0,
             minWidth: 0,
@@ -1110,7 +1392,7 @@ function AuthedView(props: ViewProps) {
           }}
         >
           <OrderBookPanel />
-          <HistoryPanel />
+          {tradingEnabled && <HistoryPanel />}
           <TradesPanel />
         </div>
       )}
@@ -1125,6 +1407,12 @@ type TradingDashboardProps = {
 export default function TradingDashboard({ mode = "full" }: TradingDashboardProps) {
   const navigate = useNavigate();
   const { isAuthed: contextIsAuthed, user: contextUser, logout: contextLogout, authFetch } = useAuth();
+  const { marketView, simulationSpeed } = useMarketMode();
+  /** Live data + trading UI: only when signed in and viewing Live market. */
+  const tradingEnabled = marketView === "live" && contextIsAuthed;
+  const useLiveData = tradingEnabled;
+  const paperStorageKey = contextUser?.email ? `paperTrading:${contextUser.email}` : null;
+
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   
   const [orderBook, setOrderBook] = useState<Order[]>([]);
@@ -1136,7 +1424,23 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [positions, setPositions] = useState<{ symbol: string; quantity: number; avgPrice: number }[]>([]);
+  const [paperState, setPaperState] = useState<PaperState>(() => loadPaperState(paperStorageKey));
+  const [liveAccountReady, setLiveAccountReady] = useState(false);
   const lastErrorRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setPaperState(loadPaperState(paperStorageKey));
+  }, [paperStorageKey]);
+
+  useEffect(() => {
+    if (!paperStorageKey || !contextIsAuthed) return;
+    const existing = localStorage.getItem(paperStorageKey);
+    if (!existing) {
+      const next = { ...PAPER_DEFAULT };
+      savePaperState(paperStorageKey, next);
+      setPaperState(next);
+    }
+  }, [paperStorageKey, contextIsAuthed]);
 
   const showError = useCallback(
     (message: string | null) => {
@@ -1148,9 +1452,9 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     },
     []
   );
-  // Load myOrderIds from localStorage on mount
   const [myOrderIds, setMyOrderIds] = useState<Set<string>>(() => {
     try {
+      if (!localStorage.getItem("token")) return new Set();
       const stored = localStorage.getItem("myOrderIds");
       if (stored) {
         const ids = JSON.parse(stored) as string[];
@@ -1161,29 +1465,28 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     }
     return new Set<string>();
   });
-  
-  // Save myOrderIds to localStorage whenever it changes
+
   useEffect(() => {
+    if (!contextIsAuthed) return;
     try {
       const idsArray = Array.from(myOrderIds);
       localStorage.setItem("myOrderIds", JSON.stringify(idsArray));
     } catch (e) {
       console.error("Failed to save myOrderIds to localStorage", e);
     }
-  }, [myOrderIds]);
+  }, [myOrderIds, contextIsAuthed]);
 
   const [historyFilter, setHistoryFilter] = useState<"all" | "open" | "filled">("all");
   const [mineOnly, setMineOnly] = useState(false);
   const [lastTradeId, setLastTradeId] = useState<string | null>(null);
   const flashRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   
-  // Demo Mode state (desktop + mobile)
-  const [demoMode, setDemoMode] = useState(false);
-  const [demoStarting, setDemoStarting] = useState(false);
-  const [demoStopping, setDemoStopping] = useState(false);
-  const marketStatus = demoMode ? "LIVE" : "IDLE";
-  const marketDot = demoMode ? "#10b981" : "#6b7280";
-  const [demoSpeed, setDemoSpeed] = useState<"slow" | "normal" | "fast">("normal");
+  const [simulationEnabled, setSimulationEnabled] = useState(false);
+  const [simulationStarting, setSimulationStarting] = useState(false);
+  const [simulationStopping, setSimulationStopping] = useState(false);
+  const headerSimulationActive = !contextIsAuthed || simulationEnabled;
+  const marketStatus = headerSimulationActive ? "LIVE" : "IDLE";
+  const marketDot = headerSimulationActive ? "#10b981" : "#6b7280";
   
   const currentPrice: number | null =
     trades.length > 0 ? trades[trades.length - 1].price : null;
@@ -1191,36 +1494,44 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   // Mobile layout tab state: which panel is visible on small screens.
   // Desktop ignores this and shows all panels.
   const [mobileTab, setMobileTab] = useState<"book" | "trades" | "history">("book");
+
+  useEffect(() => {
+    if (!tradingEnabled && mobileTab === "history") {
+      setMobileTab("book");
+    }
+  }, [tradingEnabled, mobileTab, setMobileTab]);
   
   // State for relative time updates (updates every 5 seconds; value triggers re-renders)
   const [, setTimeNow] = useState(Date.now());
   
   useEffect(() => {
-    // when demoMode is ON, refresh faster so chart/time labels feel live
-    const ms = demoMode ? 1000 : 5000;
-  
+    const ms = simulationSpeed === "fast" ? 1000 : 5000;
     const interval = setInterval(() => {
       setTimeNow(Date.now());
     }, ms);
-  
     return () => clearInterval(interval);
-  }, [demoMode]);
+  }, [simulationSpeed]);
 
-  // Fetch account balance when logged in
   useEffect(() => {
-    if (!contextIsAuthed) {
+    if (!contextIsAuthed || marketView === "demo") {
       setBalance(null);
+      setLiveAccountReady(true);
       return;
     }
+    setLiveAccountReady(false);
     authFetch(`${API_BASE_URL}/api/account`)
       .then((res) => res.json())
-      .then((data: { balance: number }) => setBalance(data.balance))
-      .catch(console.error);
-  }, [contextIsAuthed, authFetch]);
+      .then((data: { balance: number }) => {
+        setBalance(typeof data.balance === "number" ? data.balance : 0);
+      })
+      .catch(() => {
+        setBalance(0);
+      })
+      .finally(() => setLiveAccountReady(true));
+  }, [contextIsAuthed, marketView, authFetch]);
 
-  // Fetch positions when logged in
   useEffect(() => {
-    if (!contextIsAuthed) {
+    if (!contextIsAuthed || marketView === "demo") {
       setPositions([]);
       return;
     }
@@ -1228,7 +1539,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       .then((res) => res.json())
       .then((data: { symbol: string; quantity: number; avgPrice: number }[]) => setPositions(Array.isArray(data) ? data : []))
       .catch(console.error);
-  }, [contextIsAuthed, authFetch]);
+  }, [contextIsAuthed, marketView, authFetch]);
 
   // Mobile breakpoint detection: width < 768 OR height <= 520
   const [isMobile, setIsMobile] = useState(false);
@@ -1298,9 +1609,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   // };
 
   const fetchAllData = async () => {
-    const isAuthed = contextIsAuthed;
-
-    if (isAuthed) {
+    if (contextIsAuthed) {
       showError(null);
     }
 
@@ -1310,16 +1619,18 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       historyUrl = `${API_BASE_URL}/api/orders/by-ids?ids=${idsParam}`;
     }
 
-    const bookUrl = isAuthed
+    const bookUrl = useLiveData
       ? `${API_BASE_URL}/api/orders/open?limit=200`
       : `${API_BASE_URL}/api/orders/book`;
 
-    const tradesUrl = `${API_BASE_URL}/api/orders/trades?limit=200`;
+    const tradesUrl = useLiveData
+      ? `${API_BASE_URL}/api/orders/trades/db?limit=200`
+      : `${API_BASE_URL}/api/orders/trades?limit=200`;
 
     let filteredBookForFlash: Order[] = [];
 
     try {
-      const bookRes = isAuthed ? await authFetch(bookUrl) : await fetch(bookUrl);
+      const bookRes = useLiveData ? await authFetch(bookUrl) : await fetch(bookUrl);
       if (bookRes.ok) {
         const bookData = await bookRes.json();
         const normalizedBook: Order[] = Array.isArray(bookData)
@@ -1336,7 +1647,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
 
     let tradesData: Trade[] = [];
     try {
-      const tradesRes = isAuthed ? await authFetch(tradesUrl) : await fetch(tradesUrl);
+      const tradesRes = useLiveData ? await authFetch(tradesUrl) : await fetch(tradesUrl);
       if (tradesRes.ok) {
         const parsed = await tradesRes.json();
         tradesData = Array.isArray(parsed) ? parsed : [];
@@ -1348,7 +1659,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       console.error("[fetchAllData] trades failed", e);
     }
 
-    if (isAuthed) {
+    if (useLiveData) {
       try {
         const historyRes = await authFetch(historyUrl);
         if (historyRes.ok) {
@@ -1360,6 +1671,8 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       } catch (e) {
         console.error("[fetchAllData] history failed", e);
       }
+    } else {
+      setOrderHistory([]);
     }
 
     if (tradesData.length > 0) {
@@ -1405,7 +1718,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   useEffect(() => {
     fetchAllData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mineOnly, myOrderIds.size]);
+  }, [mineOnly, myOrderIds.size, marketView, useLiveData]);
 
   // WebSocket callbacks for real-time updates
   const handleBookUpdate = useCallback((book: unknown) => {
@@ -1422,16 +1735,14 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     setTrades(trades as Trade[]);
   }, []);
 
-  // WebSocket: enabled when demoMode or authed
   const { wsConnected } = useMarketWebSocket({
-    enabled: demoMode || contextIsAuthed,
+    enabled: contextIsAuthed || simulationEnabled,
     onBook: handleBookUpdate,
     onTrades: handleTradesUpdate,
   });
 
-  // Smart polling: only when demoMode or authed, and WS is not connected (fallback)
   const { isOffline } = useSmartPolling(fetchAllData, {
-    enabled: (demoMode || contextIsAuthed) && !wsConnected,
+    enabled: (contextIsAuthed || simulationEnabled) && !wsConnected,
   });
 
   // Build order book: separate buy/sell, sort
@@ -1450,6 +1761,10 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
 
   const submitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!tradingEnabled) {
+      showError("Open Live Market from Home to place orders.");
+      return;
+    }
     setLoading(true);
     showError(null);
 
@@ -1463,9 +1778,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         return;
       }
 
-      const isAuthed = contextIsAuthed;
-
-      const endpoint = isAuthed
+      const endpoint = useLiveData
         ? `${API_BASE_URL}/api/orders`
         : `${API_BASE_URL}/api/orders/demo`;
 
@@ -1477,7 +1790,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         body: JSON.stringify({ type: form.type, price, quantity }),
       };
 
-      const res = isAuthed
+      const res = useLiveData
         ? await authFetch(endpoint, commonInit)
         : await fetch(endpoint, commonInit);
 
@@ -1492,9 +1805,16 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         orderData?.id ??
         orderData?.orderId ??
         null;
-      
-      // Track user's order ID (only real backend IDs, normalized to string)
-      if (orderId && isAuthed) {
+
+      if (contextIsAuthed && !useLiveData && orderData) {
+        setPaperState((prev) => {
+          const next = applyPaperAfterDemoOrder(form, orderData, prev);
+          savePaperState(paperStorageKey, next);
+          return next;
+        });
+      }
+
+      if (orderId && contextIsAuthed) {
         setMyOrderIds((prev) => new Set(Array.from(prev).concat(String(orderId))));
       }
 
@@ -1502,16 +1822,13 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       setSuccessMessage(`Order submitted successfully${orderId ? ` (ID: ${orderId})` : ""}`);
       setTimeout(() => setSuccessMessage(null), 4000);
       await fetchAllData();
-      
-      // Check if order was immediately filled (auth users only)
+
       setTimeout(async () => {
-        if (!contextIsAuthed) return; // <-- prevents guest 401
+        if (!useLiveData) return;
 
         await fetchAllData();
 
-        const updatedHistory = await authFetch(
-          `${API_BASE_URL}/api/orders/history?limit=50`
-        )
+        const updatedHistory = await authFetch(`${API_BASE_URL}/api/orders/history?limit=50`)
           .then((r) => r.json())
           .catch(() => []);
 
@@ -1531,7 +1848,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       if (isBrowserNetworkError(e)) {
         console.error("Network error while submitting order", e);
         message =
-          !contextIsAuthed || demoMode
+          !useLiveData || simulationEnabled
             ? "Demo market running locally"
             : "Unable to reach the exchange API. Please try again in a moment.";
       }
@@ -1546,9 +1863,9 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     showError(null);
 
     try {
-      const res = await authFetch(`${API_BASE_URL}/api/orders/${id}`, {
-        method: "DELETE",
-      });
+      const res = useLiveData
+        ? await authFetch(`${API_BASE_URL}/api/orders/${id}`, { method: "DELETE" })
+        : await fetch(`${API_BASE_URL}/api/orders/${id}`, { method: "DELETE" });
 
       if (!res.ok) {
         const msg = await res.json().catch(() => null);
@@ -1560,9 +1877,10 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       let message = e?.message || "Cancel failed";
       if (isBrowserNetworkError(e)) {
         console.error("Network error while cancelling order", e);
-        message = demoMode
-          ? "Demo market running locally"
-          : "Unable to reach the exchange API. Please try again in a moment.";
+        message =
+          marketView === "demo" || simulationEnabled
+            ? "Demo market running locally"
+            : "Unable to reach the exchange API. Please try again in a moment.";
       }
       showError(message);
     } finally {
@@ -1634,7 +1952,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         if (res.ok) {
           const data = await res.json();
           if (data?.running !== undefined) {
-            setDemoMode(data.running);
+            setSimulationEnabled(data.running);
           }
         }
       } catch (e) {
@@ -1655,38 +1973,35 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     };
   }, []);
 
-  // Handle demo mode toggle via backend API
-  const handleDemoModeToggle = async (checked: boolean) => {
-    const previousValue = demoMode;
-    
-    // Optimistically update UI
-    setDemoMode(checked);
-    
+  const handleSimulationToggle = async (checked: boolean) => {
+    const previousValue = simulationEnabled;
+
+    setSimulationEnabled(checked);
+
     try {
       if (checked) {
-        setDemoStarting(true);
+        setSimulationStarting(true);
         const res = contextIsAuthed
           ? await authFetch(`${API_BASE_URL}/api/demo/start`, { method: "POST" })
           : await fetch(`${API_BASE_URL}/api/demo/start`, { method: "POST" });
-        
+
         if (!res.ok) {
           const msg = await res.json().catch(() => null);
           throw new Error(msg?.error || "Failed to start demo mode");
         }
       } else {
-        setDemoStopping(true);
+        setSimulationStopping(true);
         const res = contextIsAuthed
           ? await authFetch(`${API_BASE_URL}/api/demo/stop`, { method: "POST" })
           : await fetch(`${API_BASE_URL}/api/demo/stop`, { method: "POST" });
-        
+
         if (!res.ok) {
           const msg = await res.json().catch(() => null);
           throw new Error(msg?.error || "Failed to stop demo mode");
         }
       }
     } catch (e: any) {
-      // Revert checkbox on error
-      setDemoMode(previousValue);
+      setSimulationEnabled(previousValue);
       if (isBrowserNetworkError(e)) {
         showError(
           !contextIsAuthed
@@ -1694,11 +2009,11 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
             : "Unable to reach the exchange API. Please try again shortly."
         );
       } else {
-        showError(e?.message || "Failed to toggle demo mode. Please try again.");
+        showError(e?.message || "Failed to toggle simulation. Please try again.");
       }
     } finally {
-      setDemoStarting(false);
-      setDemoStopping(false);
+      setSimulationStarting(false);
+      setSimulationStopping(false);
     }
   };
 
@@ -1717,7 +2032,11 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         minHeight: 0,
         minWidth: 0,
         overflow: "hidden",
-        ...(isMobile ? {} : { gridColumn: "1 / 2", gridRow: "1 / span 2" }),
+        ...(isMobile
+          ? {}
+          : tradingEnabled
+            ? { gridColumn: "1 / 2", gridRow: "1 / span 2" }
+            : { gridColumn: "1 / 2", gridRow: "1 / 2" }),
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -1826,7 +2145,10 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
                     })()}
                   </div>
 
-                  {contextIsAuthed && (o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
+                  {contextIsAuthed &&
+                    tradingEnabled &&
+                    (o.status === "OPEN" || o.status === "PARTIAL") &&
+                    myOrderIds.has(String(o.id)) && (
                     <button
                       onClick={() => cancelOrder(o.id)}
                       disabled={loading}
@@ -1914,7 +2236,10 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
                     })()}
                   </div>
 
-                  {contextIsAuthed && (o.status === "OPEN" || o.status === "PARTIAL") && myOrderIds.has(String(o.id)) && (
+                  {contextIsAuthed &&
+                    tradingEnabled &&
+                    (o.status === "OPEN" || o.status === "PARTIAL") &&
+                    myOrderIds.has(String(o.id)) && (
                     <button
                       onClick={() => cancelOrder(o.id)}
                       disabled={loading}
@@ -1946,7 +2271,11 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
         minHeight: 0,
         minWidth: 0,
         overflow: "hidden",
-        ...(isMobile ? {} : { gridColumn: "2 / 3", gridRow: "2 / 3" }),
+        ...(isMobile
+          ? {}
+          : tradingEnabled
+            ? { gridColumn: "2 / 3", gridRow: "2 / 3" }
+            : { gridColumn: "2 / 3", gridRow: "1 / 2" }),
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -2022,9 +2351,12 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   );
 
   const handleCancelOrder = async (orderId: string) => {
+    if (!tradingEnabled) return;
     try {
       showError(null);
-      const res = await authFetch(`${API_BASE_URL}/api/orders/${orderId}`, { method: "DELETE" });
+      const res = useLiveData
+        ? await authFetch(`${API_BASE_URL}/api/orders/${orderId}`, { method: "DELETE" })
+        : await fetch(`${API_BASE_URL}/api/orders/${orderId}`, { method: "DELETE" });
       if (!res.ok) {
         const msg = await res.json().catch(() => null);
         throw new Error(msg?.error || "Failed to cancel order");
@@ -2034,9 +2366,10 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
     } catch (e: any) {
       let message = e?.message || "Failed to cancel order";
       if (isBrowserNetworkError(e)) {
-        message = demoMode
-          ? "Demo market running locally"
-          : "Unable to reach the exchange API. Please try again in a moment.";
+        message =
+          !useLiveData || simulationEnabled
+            ? "Demo market running locally"
+            : "Unable to reach the exchange API. Please try again in a moment.";
       }
       showError(message);
     }
@@ -2238,7 +2571,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
                 <div><StatusChip status={o.status} /></div>
                 <div style={{ fontSize: 11, color: "#6b7280" }}>{formatRelativeTime(o.createdAt)}</div>
                 <div>
-                  {contextIsAuthed && (o.status === "OPEN" || o.status === "PARTIAL") && (
+                  {contextIsAuthed && tradingEnabled && (o.status === "OPEN" || o.status === "PARTIAL") && (
                     <button
                       type="button"
                       onClick={() => handleCancelOrder(o.id)}
@@ -2422,14 +2755,14 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
       borderRadius: "50%",
       width: 8,
       height: 8,
-      animation: demoMode ? "pulse 1.2s infinite" : "none",
+      animation: headerSimulationActive ? "pulse 1.2s infinite" : "none",
     }}
   />
   <span
     style={{
       fontSize: 12,
       fontWeight: 700,
-      color: demoMode ? "#10b981" : "#9ca3af",
+      color: headerSimulationActive ? "#10b981" : "#9ca3af",
       letterSpacing: 0.5,
       fontFamily: "monospace",
     }}
@@ -2445,7 +2778,7 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
   )}
 
   {/* WebSocket status chip */}
-  {(demoMode || contextIsAuthed) && (
+  {(simulationEnabled || contextIsAuthed) && (
     <span
       style={{
         fontSize: 10,
@@ -2494,47 +2827,6 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
             </button>
           )}
 
-          {/* Demo Mode Controls */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 12, borderLeft: "1px solid #1f2937" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: demoStarting || demoStopping ? "not-allowed" : "pointer" }}>
-              <input
-                type="checkbox"
-                checked={demoMode}
-                onChange={(e) => handleDemoModeToggle(e.target.checked)}
-                disabled={demoStarting || demoStopping}
-                style={{ cursor: demoStarting || demoStopping ? "not-allowed" : "pointer", opacity: demoStarting || demoStopping ? 0.5 : 1 }}
-              />
-              <span style={{ color: demoMode ? "#fbbf24" : "#9ca3af", fontWeight: demoMode ? 600 : 400 }}>
-                Simulate Market (Bots/Demo Mode)
-                {demoStarting && " (Starting…)"}
-                {demoStopping && " (Stopping…)"}
-              </span>
-            </label>
-            {demoMode && (
-              <select
-                value={demoSpeed}
-                onChange={(e) => setDemoSpeed(e.target.value as "slow" | "normal" | "fast")}
-                className="input-terminal"
-                disabled={demoStarting || demoStopping}
-                style={{
-                  padding: "4px 8px",
-                  fontSize: 12,
-                  minWidth: 90,
-                  opacity: demoStarting || demoStopping ? 0.5 : 1,
-                }}
-              >
-                <option value="slow">Slow</option>
-                <option value="normal">Normal</option>
-                <option value="fast">Fast</option>
-              </select>
-            )}
-            {mode === "demo" && (
-              <span style={{ fontSize: 11, color: "#6b7280", fontStyle: "italic" }}>
-                Demo market managed automatically on this page
-              </span>
-            )}
-          </div>
-
         </div>
       </div>
 
@@ -2555,11 +2847,19 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
             OrderBookPanel={OrderBookPanel}
             TradesPanel={TradesPanel}
             HistoryPanel={HistoryPanel}
-            showOrderForm={mode === "full"}
+            showOrderForm
             onSignInClick={() => navigate("/auth?next=/app")}
             balance={balance}
             positions={positions}
             currentPrice={currentPrice}
+            tradingEnabled={tradingEnabled}
+            liveAccountReady={liveAccountReady}
+            devSimulation={{
+              enabled: simulationEnabled,
+              onToggle: handleSimulationToggle,
+              starting: simulationStarting,
+              stopping: simulationStopping,
+            }}
           />
         ) : (
           <GuestView
@@ -2577,8 +2877,9 @@ export default function TradingDashboard({ mode = "full" }: TradingDashboardProp
             OrderBookPanel={OrderBookPanel}
             TradesPanel={TradesPanel}
             HistoryPanel={HistoryPanel}
-            showOrderForm={mode === "demo" ? false : true}
+            showOrderForm={mode !== "demo"}
             onSignInClick={() => navigate("/auth?next=/app")}
+            tradingEnabled={false}
           />
         )}
       </div>

@@ -1,9 +1,16 @@
 import { useEffect } from "react";
 import TradingDashboard from "../TradingDashboard";
+import { useMarketMode } from "../market/MarketModeContext";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:4000";
 
 export default function GuestDemo() {
+  const { setMarketView } = useMarketMode();
+
+  useEffect(() => {
+    setMarketView("demo");
+  }, [setMarketView]);
+
   // Auto-start demo market on mount (if not already running)
   useEffect(() => {
     const startDemoIfNeeded = async () => {
