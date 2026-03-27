@@ -1,6 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:4000';
+/** Fixed for debugging — matches local backend; change back to env when done. */
+const API_BASE_URL = "http://localhost:4000";
+
+/** Shown when auth API returns 503 (e.g. database unavailable). */
+export const AUTH_SYSTEM_OFFLINE_MESSAGE =
+  "Auth system temporarily offline. Demo mode is still available.";
 
 interface User {
   email: string;
@@ -10,8 +16,9 @@ interface AuthContextType {
   token: string | null;
   user: User | null;
   isAuthed: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  /** Returns true if caller should navigate; false if 503 demo fallback handled navigation. */
+  login: (email: string, password: string) => Promise<boolean>;
+  register: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
   refreshMe: () => Promise<void>;
   loading: boolean;
@@ -23,6 +30,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
   const [token, setToken] = useState<string | null>(() => {
     return localStorage.getItem("token");
   });
@@ -63,6 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       return;
     }
+    if (token === "demo-token") {
+      setUser((u) => u ?? { email: "demo@local" });
+      return;
+    }
 
     try {
       const res = await fetch(`${API_BASE_URL}/auth/me`, {
@@ -95,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       headers,
     });
 
-    if (response.status === 401) {
+    if (response.status === 401 && token !== "demo-token") {
       // Any protected call returning 401 should behave as session expiry
       handleUnauthorized();
     }
@@ -103,24 +115,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return response;
   }, [token, handleUnauthorized]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<boolean> => {
     try {
+      console.log("API CALL →", `${API_BASE_URL}/auth/login`);
       const res = await fetch(`${API_BASE_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
+      console.log("RESPONSE STATUS:", res.status);
+
+      if (res.status === 503) {
+        console.log("FALLBACK TO DEMO MODE");
+        localStorage.setItem("token", "demo-token");
+        setToken("demo-token");
+        setUser({ email: email || "demo@local" });
+        navigate("/app");
+        return false;
+      }
+
       if (!res.ok) {
         const msg = await res.json().catch(() => null);
-        const errorMsg = msg?.error || "Login failed";
-        
+        const errorMsg = msg?.error || msg?.message || "Login failed";
+
         // Standardize error messages with helpful guidance
         if (res.status === 401 || errorMsg.toLowerCase().includes("invalid") || errorMsg.toLowerCase().includes("incorrect")) {
           throw new Error("The email or password you entered is incorrect. Please check your credentials and try again, or click 'Register' to create a new account.");
         }
         if (res.status === 404) {
           throw new Error("Account not found. Please check your email address or click 'Register' to create a new account.");
+        }
+        if (res.status === 400) {
+          throw new Error("Invalid email or password format. Please check your credentials and try again.");
         }
         if (res.status >= 500) {
           throw new Error("Server unavailable. Please try again in a few moments.");
@@ -133,9 +160,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(data.token);
         const userEmail = data?.user?.email || email;
         setUser({ email: userEmail });
-      } else {
-        throw new Error("No token received");
+        return true;
       }
+      throw new Error("No token received");
     } catch (e: any) {
       // Re-throw with clean error message
       if (e.message && !e.message.includes("Failed to fetch")) {
@@ -145,36 +172,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const register = async (email: string, password: string) => {
-    const res = await fetch(`${API_BASE_URL}/auth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
+  const register = async (email: string, password: string): Promise<boolean> => {
+    try {
+      console.log("API CALL →", `${API_BASE_URL}/auth/register`);
+      const res = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
 
-    if (!res.ok) {
-      const msg = await res.json().catch(() => null);
-      const errorMsg = msg?.error || "Registration failed";
-      
-      // Standardize error messages with helpful guidance
-      if (errorMsg.toLowerCase().includes("already") || errorMsg.toLowerCase().includes("exists") || res.status === 409) {
-        throw new Error("This email is already registered. Please sign in instead, or use a different email address.");
-      }
-      if (res.status === 400) {
-        throw new Error("Invalid email or password format. Please check that your email is valid and your password meets all requirements.");
-      }
-      if (res.status >= 500) {
-        throw new Error("Server unavailable. Please try again in a few moments.");
-      }
-      throw new Error(errorMsg);
-    }
+      console.log("RESPONSE STATUS:", res.status);
 
-    // Registration successful - do NOT set token (user must log in separately)
-    const data = await res.json();
-    if (!data) {
-      throw new Error("Registration failed");
+      if (res.status === 503) {
+        console.log("FALLBACK TO DEMO MODE");
+        localStorage.setItem("token", "demo-token");
+        setToken("demo-token");
+        setUser({ email: email || "demo@local" });
+        navigate("/app");
+        return false;
+      }
+
+      if (!res.ok) {
+        const msg = await res.json().catch(() => null);
+        const errorMsg = msg?.error || msg?.message || "Registration failed";
+
+        // Standardize error messages with helpful guidance
+        if (errorMsg.toLowerCase().includes("already") || errorMsg.toLowerCase().includes("exists") || res.status === 409) {
+          throw new Error("This email is already registered. Please sign in instead, or use a different email address.");
+        }
+        if (res.status === 400) {
+          throw new Error("Invalid email or password format. Please check that your email is valid and your password meets all requirements.");
+        }
+        if (res.status >= 500) {
+          throw new Error("Server unavailable. Please try again in a few moments.");
+        }
+        throw new Error(errorMsg);
+      }
+
+      // Registration successful - do NOT set token (user must log in separately)
+      const data = await res.json();
+      if (!data) {
+        throw new Error("Registration failed");
+      }
+      return true;
+    } catch (e: any) {
+      if (e.message && !e.message.includes("Failed to fetch")) {
+        throw e;
+      }
+      throw new Error("Unable to connect to the server. Please check your internet connection and try again.");
     }
-    // Return success without logging in
   };
 
   const logout = () => {

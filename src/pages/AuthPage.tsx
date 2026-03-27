@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth, AUTH_SYSTEM_OFFLINE_MESSAGE } from "../auth/AuthContext";
 import Toast from "../components/Toast";
 
 // Password validation helpers
@@ -68,8 +68,15 @@ export default function AuthPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log("SUBMIT FIRED", { email, password });
     setError(null);
     setSuccessMessage(null);
+
+    console.log("VALIDATION CHECK", {
+      isFormValid,
+      email,
+      passwordLength: password.length,
+    });
 
     // Client-side validation
     if (!validateEmail(email)) {
@@ -98,18 +105,18 @@ export default function AuthPage() {
 
     try {
       if (mode === "login") {
-        await login(email, password);
-        // Success - navigate to next page
-        navigate(next);
+        const shouldNavigate = await login(email, password);
+        if (shouldNavigate) {
+          navigate(next);
+        }
       } else {
-        // Registration - do NOT auto-login
-        await register(email, password);
-        setSuccessMessage("Registration successful! Please sign in.");
-        setPassword("");
-        setConfirmPassword("");
-        // Switch to login tab and prefill email
-        setMode("login");
-        // Keep email prefilled
+        const registrationOk = await register(email, password);
+        if (registrationOk) {
+          setSuccessMessage("Registration successful! Please sign in.");
+          setPassword("");
+          setConfirmPassword("");
+          setMode("login");
+        }
       }
     } catch (e: any) {
       setError(e?.message || `${mode === "login" ? "Login" : "Registration"} failed`);
@@ -256,13 +263,13 @@ export default function AuthPage() {
           </button>
         </div>
 
-        {/* Error message */}
+        {/* Error / service notice (503 uses info style — not a harsh failure) */}
         {error && (
           <div
             style={{
-              background: "#7f1d1d",
-              border: "1px solid #ef4444",
-              color: "#fca5a5",
+              background: error === AUTH_SYSTEM_OFFLINE_MESSAGE ? "#1e3a5f" : "#7f1d1d",
+              border: `1px solid ${error === AUTH_SYSTEM_OFFLINE_MESSAGE ? "#3b82f6" : "#ef4444"}`,
+              color: error === AUTH_SYSTEM_OFFLINE_MESSAGE ? "#bfdbfe" : "#fca5a5",
               padding: "12px",
               borderRadius: 6,
               marginBottom: 16,
@@ -270,7 +277,9 @@ export default function AuthPage() {
               lineHeight: 1.5,
             }}
           >
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Error</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              {error === AUTH_SYSTEM_OFFLINE_MESSAGE ? "Service notice" : "Error"}
+            </div>
             <div>{error}</div>
             {mode === "login" && error.toLowerCase().includes("incorrect") && (
               <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
@@ -551,7 +560,7 @@ export default function AuthPage() {
 
           <button
             type="submit"
-            disabled={loading || !isFormValid}
+            disabled={loading}
             className="btn-primary"
             style={{
               width: "100%",
